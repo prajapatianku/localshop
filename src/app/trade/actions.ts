@@ -222,3 +222,19 @@ export async function closeTrade(params: CloseTradeParams) {
     followedRules: params.followedSlTpRules 
   }
 }
+
+export async function getTradeById(id: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+
+  const { data, error } = await supabase
+    .from('trades')
+    .select('*, strategies(name)')
+    .eq('id', id)
+    .eq('user_id', user.id)
+    .single()
+
+  if (error) throw error
+  return data
+}
