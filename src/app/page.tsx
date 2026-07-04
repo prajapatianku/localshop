@@ -1,65 +1,160 @@
-import Image from "next/image";
+import Link from 'next/link'
+import { getActiveTrade, getActiveStrategyWithRules } from './trade/actions'
+import { AlertCircle, ArrowUpRight, TrendingUp, ShieldCheck, Play, ArrowRight, Activity, LogOut } from 'lucide-react'
+import { createClient } from '@/utils/supabase/server'
 
-export default function Home() {
+export default async function Home() {
+  const activeTrade = await getActiveTrade()
+  const activeStrategyRes = await getActiveStrategyWithRules()
+  
+  // Determine where the "Ready to Trade" button will route
+  let readyToTradeRoute = '/trade/checklist'
+  let warningMessage = null
+
+  if (activeStrategyRes.error === 'no_active_strategy') {
+    if (!activeStrategyRes.hasAnyStrategy) {
+      readyToTradeRoute = '/strategies/create'
+      warningMessage = 'You need to create a strategy before you can journal a trade.'
+    } else {
+      readyToTradeRoute = '/strategies'
+      warningMessage = 'Please select and activate a trading strategy first.'
+    }
+  }
+
+  // Get current user details for welcome message
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  const email = user?.email || 'Trader'
+  const username = email.split('@')[0]
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
+    <main className="min-h-screen bg-slate-950 text-slate-100 px-6 py-6 pb-28 relative flex flex-col justify-between overflow-hidden">
+      {/* Glow backgrounds */}
+      <div className="absolute top-[-10%] right-[-10%] w-[70%] h-[50%] rounded-full bg-emerald-500/5 blur-[100px] pointer-events-none" />
+      <div className="absolute bottom-[-10%] left-[-10%] w-[70%] h-[50%] rounded-full bg-teal-500/5 blur-[100px] pointer-events-none" />
+
+      {/* Top Greeting */}
+      <div className="z-10">
+        <div className="flex justify-between items-center mb-6">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-lg bg-emerald-500 flex items-center justify-center text-slate-950 font-black text-sm">
+              GT
+            </div>
+            <span className="font-extrabold text-sm tracking-wide text-slate-300">Gully Trader</span>
+          </div>
+          <Link
+            href="/profile"
+            className="p-2 rounded-xl bg-slate-900/80 border border-slate-800/80 text-slate-400 hover:text-slate-200 transition-all"
+          >
+            <LogOut className="w-4 h-4 rotate-180" />
+          </Link>
+        </div>
+
+        <div className="mb-8">
+          <h1 className="text-xl font-medium text-slate-400">
+            Welcome back,
           </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+          <h2 className="text-3xl font-extrabold text-slate-100 tracking-tight capitalize mt-0.5">
+            {username}
+          </h2>
+        </div>
+      </div>
+
+      {/* Main Action Loop Area */}
+      <div className="flex-1 flex flex-col justify-center items-center py-6 z-10">
+        {activeTrade ? (
+          /* Active Trade Card */
+          <div className="w-full bg-gradient-to-br from-slate-900 to-slate-950 border border-slate-800 rounded-3xl p-6 shadow-xl relative overflow-hidden ring-1 ring-emerald-500/20">
+            <div className="absolute top-0 right-0 bg-emerald-500/10 border-b border-l border-emerald-500/20 text-emerald-400 px-3.5 py-1 rounded-bl-2xl text-[9px] font-extrabold tracking-widest uppercase flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+              LIVE POSITION
+            </div>
+
+            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+              Active Trade
+            </span>
+
+            <div className="flex items-baseline gap-3 mt-2">
+              <h3 className="text-3xl font-black tracking-tight text-slate-100">
+                {activeTrade.symbol}
+              </h3>
+              <span className={`px-2 py-0.5 rounded-lg text-xs font-black uppercase tracking-wider ${
+                activeTrade.direction === 'BUY' 
+                  ? 'bg-emerald-500/10 text-emerald-400' 
+                  : 'bg-rose-500/10 text-rose-400'
+              }`}>
+                {activeTrade.direction}
+              </span>
+            </div>
+
+            <p className="text-xs text-slate-500 mt-2">
+              Strategy: {activeTrade.strategies?.name || 'Manual'}
+            </p>
+
+            <div className="grid grid-cols-3 gap-2 mt-6 pt-5 border-t border-slate-800/40 text-center">
+              <div>
+                <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">Entry</span>
+                <span className="block text-sm font-extrabold text-slate-200 mt-1">{activeTrade.entry_price}</span>
+              </div>
+              <div>
+                <span className="block text-[10px] font-bold text-rose-500/80 uppercase tracking-wider">Stop Loss</span>
+                <span className="block text-sm font-extrabold text-rose-400/90 mt-1">{activeTrade.sl}</span>
+              </div>
+              <div>
+                <span className="block text-[10px] font-bold text-emerald-500/80 uppercase tracking-wider">Target</span>
+                <span className="block text-sm font-extrabold text-emerald-400/90 mt-1">{activeTrade.tp}</span>
+              </div>
+            </div>
+
+            <Link
+              href={`/trade/close/${activeTrade.id}`}
+              className="mt-6 flex w-full justify-center items-center gap-1.5 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 px-4 py-4 text-sm font-extrabold text-slate-950 shadow-lg shadow-emerald-500/15 hover:from-emerald-400 hover:to-teal-400 active:scale-[0.98] transition-all select-none"
             >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+              Close Trade
+              <ArrowUpRight className="w-4.5 h-4.5" />
+            </Link>
+          </div>
+        ) : (
+          /* Ready to Trade Glowing Center Button */
+          <div className="flex flex-col items-center">
+            {warningMessage && (
+              <div className="mb-6 rounded-2xl bg-amber-500/10 border border-amber-500/20 p-3.5 text-xs text-amber-400 flex items-center gap-2 max-w-[280px] text-center">
+                <AlertCircle className="w-4 h-4 shrink-0 text-amber-500" />
+                <span>{warningMessage}</span>
+              </div>
+            )}
+
+            <Link
+              href={readyToTradeRoute}
+              className="w-48 h-48 rounded-full bg-gradient-to-tr from-emerald-400 via-teal-500 to-emerald-600 flex flex-col items-center justify-center text-slate-950 font-black text-xl tracking-wide shadow-2xl shadow-emerald-500/30 hover:scale-105 active:scale-[0.97] transition-all duration-300 relative group select-none"
             >
-              Learning
-            </a>{" "}
-            center.
+              {/* Outer pulsing ring */}
+              <div className="absolute inset-0 rounded-full border-4 border-emerald-400/30 animate-pulse group-hover:scale-110 transition-all duration-300" />
+              <Activity className="w-8 h-8 mb-2 stroke-[2.5px] text-slate-950" />
+              <span>Ready to</span>
+              <span className="tracking-widest uppercase text-2xl font-black mt-0.5">Trade</span>
+            </Link>
+
+            {activeStrategyRes.strategy && (
+              <p className="mt-6 text-xs text-slate-500 font-semibold tracking-wider uppercase text-center flex items-center gap-1.5">
+                <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                Strategy: {activeStrategyRes.strategy.name}
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Tiny Insight Card / Quick Tip at bottom */}
+      <div className="mt-auto bg-slate-900/30 border border-slate-900 rounded-2xl p-4 flex items-start gap-3 z-10">
+        <TrendingUp className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+        <div>
+          <h4 className="text-xs font-bold text-slate-300">Trading Discipline Tip</h4>
+          <p className="text-[11px] text-slate-500 mt-1 leading-normal">
+            Traders who strictly follow a rule-based execution process increase their long-term expectancy by over 40%. Don't skip the checks.
           </p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
-  );
+      </div>
+    </main>
+  )
 }
