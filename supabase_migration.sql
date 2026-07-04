@@ -82,28 +82,29 @@ alter table public.trade_checklist_results enable row level security;
 alter table public.subscriptions enable row level security;
 
 -- ----------------------------------------------------
--- 3. RLS Policies
+-- 3. Helper Functions & RLS Policies
 -- ----------------------------------------------------
+
+-- Security Definer helper to check if a user is an admin without triggering RLS recursion
+create or replace function public.is_admin(user_id uuid)
+returns boolean as $$
+begin
+  return exists (
+    select 1 from public.profiles
+    where id = user_id and role = 'admin'
+  );
+end;
+$$ language plpgsql security definer;
 
 -- Profiles Policies
 create policy "Allow users to read their own profile" on public.profiles
   for select using (auth.uid() = id);
 
 create policy "Allow admins to read all profiles" on public.profiles
-  for select using (
-    exists (
-      select 1 from public.profiles
-      where profiles.id = auth.uid() and profiles.role = 'admin'
-    )
-  );
+  for select using (public.is_admin(auth.uid()));
 
 create policy "Allow admins to update profiles" on public.profiles
-  for update using (
-    exists (
-      select 1 from public.profiles
-      where profiles.id = auth.uid() and profiles.role = 'admin'
-    )
-  );
+  for update using (public.is_admin(auth.uid()));
 
 -- Strategies Policies
 create policy "Allow users to manage their own strategies" on public.strategies
@@ -136,12 +137,7 @@ create policy "Allow users to read their own subscription" on public.subscriptio
   for select using (auth.uid() = user_id);
 
 create policy "Allow admins to manage all subscriptions" on public.subscriptions
-  for all using (
-    exists (
-      select 1 from public.profiles
-      where profiles.id = auth.uid() and profiles.role = 'admin'
-    )
-  );
+  for all using (public.is_admin(auth.uid()));
 
 -- ----------------------------------------------------
 -- 4. Triggers for Automatic Profile & Subscriptions
