@@ -34,6 +34,11 @@ export async function middleware(request: NextRequest) {
   const url = request.nextUrl.clone()
   const path = url.pathname
 
+  // Bypass all API routes (like webhooks) from auth & subscription checks
+  if (path.startsWith('/api/')) {
+    return supabaseResponse
+  }
+
   // Public paths that do not require auth (except for static assets, handled by matcher)
   const isAuthPath = path === '/login' || path === '/signup' || path.startsWith('/auth/')
 
