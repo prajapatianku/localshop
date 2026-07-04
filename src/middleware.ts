@@ -70,6 +70,17 @@ export async function middleware(request: NextRequest) {
     .eq('user_id', user.id)
     .single()
 
+  const isSubscribePath = path === '/subscribe'
+
+  console.log('MIDDLEWARE GATE CHECK:', {
+    path,
+    email: user.email,
+    role: profile?.role,
+    subscription,
+    isSubscribePath,
+    now: new Date().toISOString()
+  })
+
   // Admin route gating
   if (path.startsWith('/admin')) {
     if (profile?.role !== 'admin') {
@@ -77,9 +88,6 @@ export async function middleware(request: NextRequest) {
       return NextResponse.redirect(url)
     }
   }
-
-  // Subscription gating (admins bypass)
-  const isSubscribePath = path === '/subscribe'
   
   if (!isSubscribePath && profile?.role !== 'admin') {
     let isSubscribed = false
@@ -104,10 +112,12 @@ export async function middleware(request: NextRequest) {
     }
   }
 
-  // Redirect subscribed users away from /subscribe
-  if (isSubscribePath && profile?.role !== 'admin') {
+  // Redirect subscribed users (and admins) away from /subscribe
+  if (isSubscribePath) {
     let isSubscribed = false
-    if (subscription) {
+    if (profile?.role === 'admin') {
+      isSubscribed = true
+    } else if (subscription) {
       const trialEnds = new Date(subscription.trial_ends_at).getTime()
       const now = Date.now()
       
@@ -121,6 +131,7 @@ export async function middleware(request: NextRequest) {
         isSubscribed = true
       }
     }
+
     if (isSubscribed) {
       url.pathname = '/'
       return NextResponse.redirect(url)
