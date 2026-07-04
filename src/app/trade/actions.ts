@@ -238,3 +238,19 @@ export async function getTradeById(id: string) {
   if (error) throw error
   return data
 }
+
+export async function getClosedTrades() {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+
+  const { data, error } = await supabase
+    .from('trades')
+    .select('*, strategies(name)')
+    .eq('user_id', user.id)
+    .eq('status', 'CLOSED')
+    .order('exit_datetime', { ascending: false })
+
+  if (error) throw error
+  return data || []
+}
