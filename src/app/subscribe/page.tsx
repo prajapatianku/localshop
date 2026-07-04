@@ -3,8 +3,9 @@
 import React, { useEffect, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { Check, Loader2, Sparkles, CreditCard, ShieldAlert, BadgeInfo } from 'lucide-react'
+import { Check, Loader2, Sparkles, CreditCard, ShieldAlert, BadgeInfo, LogOut } from 'lucide-react'
 import { createClient } from '@/utils/supabase/client'
+import { logout } from '@/app/auth/actions'
 
 interface Subscription {
   plan: string
@@ -20,6 +21,12 @@ export default function SubscribePage() {
   const [userId, setUserId] = useState<string | null>(null)
   const [simulationMsg, setSimulationMsg] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
+
+  const handleLogout = async () => {
+    await logout()
+    router.push('/login')
+    router.refresh()
+  }
 
   const loadSubscription = async () => {
     try {
@@ -260,6 +267,16 @@ export default function SubscribePage() {
             Simulate Yearly Webhook
           </button>
         </div>
+      </div>
+
+      <div className="mt-8 flex justify-center">
+        <button
+          onClick={handleLogout}
+          className="text-xs font-extrabold text-rose-400 hover:text-rose-300 flex items-center gap-1.5 py-2 px-4 rounded-xl border border-rose-500/20 bg-rose-500/5 transition-all active:scale-95 select-none"
+        >
+          <LogOut className="w-4 h-4" />
+          Sign Out
+        </button>
       </div>
     </main>
   )
