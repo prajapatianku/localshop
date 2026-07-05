@@ -8,12 +8,13 @@ export async function getActiveTrade() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return null
 
-  // Fetch open trade along with its legs and strategy name
+  // Fetch open trade along with its legs and strategy name (excluding soft-deleted)
   const { data, error } = await supabase
     .from('trades')
     .select('*, strategies(name), trade_legs(*)')
     .eq('user_id', user.id)
     .eq('status', 'OPEN')
+    .is('deleted_at', null)
     .maybeSingle()
 
   if (error) {
@@ -110,7 +111,7 @@ export async function placeTrade(params: PlaceTradeParams) {
     return { error: 'Discipline error: All rules in the checklist must be verified and checked.' }
   }
 
-  // 3. Insert parent trade (without direction and entry price, since they are on legs)
+  // 3. Insert parent trade
   const { data: trade, error: tradeError } = await supabase
     .from('trades')
     .insert({
@@ -143,7 +144,6 @@ export async function placeTrade(params: PlaceTradeParams) {
     .insert(legRows)
 
   if (legsError) {
-    // rollback trade if legs failed
     await supabase.from('trades').delete().eq('id', trade.id)
     return { error: legsError.message }
   }
@@ -160,7 +160,6 @@ export async function placeTrade(params: PlaceTradeParams) {
     .insert(checklistRows)
 
   if (checklistError) {
-    // rollback trade if checklist fails
     await supabase.from('trades').delete().eq('id', trade.id)
     return { error: checklistError.message }
   }
@@ -189,7 +188,6 @@ export async function closeTrade(params: CloseTradeParams) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Not authenticated.' }
 
-  // 1. Fetch the trade along with its current legs
   const { data: trade, error: fetchError } = await supabase
     .from('trades')
     .select('*, trade_legs(*)')
@@ -203,7 +201,6 @@ export async function closeTrade(params: CloseTradeParams) {
 
   let totalPnl = 0
 
-  // 2. Loop and update each leg's exit parameters and P&L
   for (const closeLeg of params.legs) {
     const originalLeg = (trade.trade_legs || []).find((l: any) => l.id === closeLeg.legId)
     if (!originalLeg) continue
@@ -213,9 +210,6 @@ export async function closeTrade(params: CloseTradeParams) {
     const lotSize = Number(originalLeg.lot_size)
     const action = originalLeg.action
 
-    // P/L calculation: 
-    // BUY: (Exit - Entry) * Lot Size
-    // SELL: (Entry - Exit) * Lot Size
     const legPnl = action === 'BUY' ? (exit - entry) * lotSize : (entry - exit) * lotSize
     totalPnl += legPnl
 
@@ -233,7 +227,6 @@ export async function closeTrade(params: CloseTradeParams) {
     }
   }
 
-  // 3. Update the parent trade record
   const { error: updateError } = await supabase
     .from('trades')
     .update({
@@ -270,6 +263,7 @@ export async function getTradeById(id: string) {
     .select('*, strategies(name), trade_legs(*)')
     .eq('id', id)
     .eq('user_id', user.id)
+    .is('deleted_at', null)
     .single()
 
   if (error) throw error
@@ -286,8 +280,132 @@ export async function getClosedTrades() {
     .select('*, strategies(name), trade_legs(*)')
     .eq('user_id', user.id)
     .eq('status', 'CLOSED')
+    .is('deleted_at', null)
     .order('exit_datetime', { ascending: false })
 
   if (error) throw error
   return data || []
+}
+
+// ----------------------------------------------------
+// V3 UPDATE: Soft Delete & Edit Actions
+// ----------------------------------------------------
+
+export async function softDeleteTrade(tradeId: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'Not authenticated' }
+
+  const { error } = await supabase
+    .from('trades')
+    .update({ deleted_at: new Date().toISOString() })
+    .eq('id', tradeId)
+    .eq('user_id', user.id)
+
+  if (error) {
+    return { error: error.message }
+  }
+
+  revalidatePath('/')
+  revalidatePath('/journal')
+  revalidatePath('/analyze')
+  return { success: true }
+}
+
+interface EditLegParam {
+  id: string
+  action: 'BUY' | 'SELL'
+  optionType: 'CALL' | 'PUT' | 'NONE'
+  entryPrice: number
+  lotSize: number
+  exitPrice: number | null
+}
+
+interface EditTradeParams {
+  tradeId: string
+  symbol: string
+  sl: number
+  tp: number
+  entryDatetime: string
+  exitDatetime: string
+  performedAsExpected: boolean
+  followedSlTpRules: boolean
+  legs: EditLegParam[]
+}
+
+export async function saveEditedTrade(params: EditTradeParams) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'Not authenticated.' }
+
+  // 1. Fetch trade to verify ownership
+  const { data: trade, error: fetchError } = await supabase
+    .from('trades')
+    .select('id')
+    .eq('id', params.tradeId)
+    .eq('user_id', user.id)
+    .single()
+
+  if (fetchError || !trade) {
+    return { error: 'Trade record not found or access denied.' }
+  }
+
+  let totalPnl = 0
+
+  // 2. Update legs individually and compute P/L
+  for (const leg of params.legs) {
+    let legPnl: number | null = null
+    
+    if (leg.exitPrice !== null && !isNaN(leg.exitPrice)) {
+      const entry = Number(leg.entryPrice)
+      const exit = Number(leg.exitPrice)
+      const lots = Number(leg.lotSize)
+      legPnl = leg.action === 'BUY' ? (exit - entry) * lots : (entry - exit) * lots
+      totalPnl += legPnl
+    }
+
+    const { error: legUpdateError } = await supabase
+      .from('trade_legs')
+      .update({
+        action: leg.action,
+        option_type: leg.optionType,
+        entry_price: leg.entryPrice,
+        lot_size: leg.lotSize,
+        exit_price: leg.exitPrice,
+        exit_datetime: params.exitDatetime,
+        pnl: legPnl
+      })
+      .eq('id', leg.id)
+      .eq('trade_id', params.tradeId)
+
+    if (legUpdateError) {
+      return { error: `Failed to update leg: ${legUpdateError.message}` }
+    }
+  }
+
+  // 3. Update the parent trade record
+  const { error: tradeUpdateError } = await supabase
+    .from('trades')
+    .update({
+      symbol: params.symbol.toUpperCase().trim(),
+      sl: params.sl,
+      tp: params.tp,
+      entry_datetime: params.entryDatetime,
+      exit_datetime: params.exitDatetime,
+      pnl: totalPnl,
+      performed_as_expected: params.performedAsExpected,
+      followed_sl_tp_rules: params.followedSlTpRules,
+    })
+    .eq('id', params.tradeId)
+    .eq('user_id', user.id)
+
+  if (tradeUpdateError) {
+    return { error: `Failed to update trade: ${tradeUpdateError.message}` }
+  }
+
+  revalidatePath('/')
+  revalidatePath('/journal')
+  revalidatePath('/analyze')
+
+  return { success: true }
 }

@@ -1,9 +1,9 @@
 'use client'
 
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useTransition } from 'react'
 import Link from 'next/link'
-import { Calendar, Filter, Loader2, RefreshCw, Smile, AlertCircle, ArrowLeft, ArrowUpRight, TrendingUp, TrendingDown, BookOpen } from 'lucide-react'
-import { getClosedTrades } from '../trade/actions'
+import { Calendar, Filter, Loader2, RefreshCw, Smile, AlertCircle, ArrowLeft, ArrowUpRight, TrendingUp, TrendingDown, BookOpen, Edit, Trash2, ShieldAlert } from 'lucide-react'
+import { getClosedTrades, softDeleteTrade } from '../trade/actions'
 import { getStrategies } from '../strategies/actions'
 
 interface TradeLeg {
@@ -48,6 +48,11 @@ export default function JournalPage() {
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
 
+  // Soft Delete Confirmation states mapped by tradeId
+  const [deletingTradeId, setDeletingTradeId] = useState<string | null>(null)
+  
+  const [isPending, startTransition] = useTransition()
+
   const loadData = async (isRef = false) => {
     try {
       if (isRef) setRefreshing(true)
@@ -71,6 +76,20 @@ export default function JournalPage() {
   useEffect(() => {
     loadData()
   }, [])
+
+  // Soft Delete handler
+  const handleDeleteTrade = async (tradeId: string) => {
+    startTransition(async () => {
+      const res = await softDeleteTrade(tradeId)
+      if (res?.error) {
+        setError(res.error)
+      } else {
+        setDeletingTradeId(null)
+        // Refresh local state list
+        setTrades(prev => prev.filter(t => t.id !== tradeId))
+      }
+    })
+  }
 
   // Apply filters client-side
   const filteredTrades = trades.filter((trade) => {
@@ -102,6 +121,23 @@ export default function JournalPage() {
     return true
   })
 
+  // ----------------------------------------------------
+  // V3 UPDATE: Combined P/L Summary Metrics Calculations
+  // ----------------------------------------------------
+  const totalFiltered = filteredTrades.length
+  let combinedPnl = 0
+  let winsCount = 0
+  let lossesCount = 0
+
+  filteredTrades.forEach(t => {
+    combinedPnl += Number(t.pnl)
+    if (t.pnl > 0) winsCount++
+    else if (t.pnl <= 0) lossesCount++
+  })
+
+  const winRate = totalFiltered > 0 ? (winsCount / totalFiltered) * 100 : 0
+  const lossRate = totalFiltered > 0 ? (lossesCount / totalFiltered) * 100 : 0
+
   const formatDate = (dateStr: string) => {
     const d = new Date(dateStr)
     return d.toLocaleDateString(undefined, {
@@ -122,7 +158,7 @@ export default function JournalPage() {
           <Link href="/" className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200 transition-all active:scale-95">
             <ArrowLeft className="w-5 h-5" />
           </Link>
-          <h1 className="text-2xl font-bold tracking-tight">Journal</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Journal Log</h1>
         </div>
         <button
           onClick={() => loadData(true)}
@@ -136,6 +172,35 @@ export default function JournalPage() {
       {error && (
         <div className="rounded-xl bg-rose-500/10 border border-rose-500/20 p-4 text-sm text-rose-400 mb-6">
           {error}
+        </div>
+      )}
+
+      {/* V3 UPDATE: Combined Performance Summary Banner */}
+      {!loading && trades.length > 0 && (
+        <div className="bg-slate-900/60 border border-slate-800 rounded-3xl p-5 mb-6 relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-[30%] h-[60%] rounded-full bg-emerald-500/5 blur-[40px] pointer-events-none" />
+          <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">Filtered Summary Metrics</h3>
+          
+          <div className="grid grid-cols-3 gap-2 text-center divide-x divide-slate-800/60">
+            <div>
+              <span className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider">Combined P/L</span>
+              <span className={`block text-lg font-black mt-1 ${combinedPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                {combinedPnl >= 0 ? '+' : ''}{combinedPnl.toFixed(2)}
+              </span>
+            </div>
+            <div>
+              <span className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider">Win Rate</span>
+              <span className="block text-lg font-black text-slate-200 mt-1">
+                {winRate.toFixed(0)}%
+              </span>
+            </div>
+            <div>
+              <span className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider">Loss Rate</span>
+              <span className="block text-lg font-black text-slate-400 mt-1">
+                {lossRate.toFixed(0)}%
+              </span>
+            </div>
+          </div>
         </div>
       )}
 
@@ -197,7 +262,7 @@ export default function JournalPage() {
               type="date"
               value={startDate}
               onChange={(e) => setStartDate(e.target.value)}
-              className="block w-full rounded-xl border-0 bg-slate-950/80 py-2.5 px-2 text-xs text-slate-300 ring-1 ring-inset ring-slate-800 focus:ring-2 focus:ring-emerald-500 outline-none"
+              className="block w-full rounded-xl border-0 bg-slate-955/80 py-2.5 px-2 text-xs text-slate-300 ring-1 ring-inset ring-slate-800 focus:ring-2 focus:ring-emerald-500 outline-none"
             />
           </div>
         </div>
@@ -209,7 +274,7 @@ export default function JournalPage() {
               type="date"
               value={endDate}
               onChange={(e) => setEndDate(e.target.value)}
-              className="block w-full rounded-xl border-0 bg-slate-950/80 py-2.5 px-2 text-xs text-slate-300 ring-1 ring-inset ring-slate-800 focus:ring-2 focus:ring-emerald-500 outline-none"
+              className="block w-full rounded-xl border-0 bg-slate-955/80 py-2.5 px-2 text-xs text-slate-300 ring-1 ring-inset ring-slate-800 focus:ring-2 focus:ring-emerald-500 outline-none"
             />
           </div>
           <div className="flex items-end">
@@ -248,11 +313,37 @@ export default function JournalPage() {
           {filteredTrades.map((trade) => {
             const isWin = trade.pnl > 0
             const followed = trade.followed_sl_tp_rules
+            const isDeletingConfirm = deletingTradeId === trade.id
+
             return (
               <div
                 key={trade.id}
-                className="bg-slate-900/50 backdrop-blur-sm border border-slate-800/80 rounded-2xl p-5 transition-all hover:border-slate-700"
+                className="bg-slate-900/50 backdrop-blur-sm border border-slate-800/80 rounded-2xl p-5 transition-all hover:border-slate-700 relative overflow-hidden"
               >
+                {/* Inline Delete Confirmation Overlay */}
+                {isDeletingConfirm && (
+                  <div className="absolute inset-0 bg-slate-950/95 backdrop-blur flex flex-col items-center justify-center p-4 z-10 text-center">
+                    <ShieldAlert className="w-6 h-6 text-rose-500 mb-2" />
+                    <p className="text-xs font-bold text-slate-200">Confirm Soft Delete?</p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">Historical analytics will preserve but log will hide.</p>
+                    <div className="flex gap-4 mt-3">
+                      <button
+                        onClick={() => handleDeleteTrade(trade.id)}
+                        disabled={isPending}
+                        className="py-1.5 px-4 rounded-lg bg-rose-500 text-slate-950 text-xs font-bold hover:bg-rose-400 transition-all select-none"
+                      >
+                        {isPending ? 'Deleting...' : 'Yes, Delete'}
+                      </button>
+                      <button
+                        onClick={() => setDeletingTradeId(null)}
+                        className="py-1.5 px-4 rounded-lg bg-slate-800 text-slate-300 text-xs font-bold hover:bg-slate-700 transition-all select-none"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {/* Top metadata */}
                 <div className="flex justify-between items-start mb-3">
                   <div>
@@ -323,22 +414,40 @@ export default function JournalPage() {
                   })}
                 </div>
 
-                {/* Aggregated Total Result */}
-                <div className="mt-3 pt-3 border-t border-slate-800/30 flex justify-between items-center">
-                  <span className="text-[10px] text-slate-500 uppercase tracking-wider">Total Net Result</span>
-                  <div className="flex items-center gap-1">
-                    {isWin ? (
-                      <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
-                    ) : (
-                      <TrendingDown className="w-3.5 h-3.5 text-rose-400" />
-                    )}
-                    <span className={`text-base font-black ${isWin ? 'text-emerald-400' : 'text-rose-400'}`}>
-                      {isWin ? '+' : ''}{Number(trade.pnl).toFixed(2)}
-                    </span>
+                {/* Aggregated Total Result & Actions */}
+                <div className="mt-4 pt-3 border-t border-slate-800/30 flex justify-between items-center">
+                  <div className="flex gap-3">
+                    <Link
+                      href={`/trade/edit/${trade.id}`}
+                      className="flex items-center gap-1 text-[10px] font-bold text-slate-500 hover:text-emerald-400 transition-colors uppercase py-1 px-2.5 rounded bg-slate-950 border border-slate-850"
+                    >
+                      <Edit className="w-3 h-3" />
+                      Edit
+                    </Link>
+                    <button
+                      onClick={() => setDeletingTradeId(trade.id)}
+                      className="flex items-center gap-1 text-[10px] font-bold text-slate-550 hover:text-rose-400 transition-colors uppercase py-1 px-2.5 rounded bg-slate-950 border border-slate-850"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      Delete
+                    </button>
+                  </div>
+
+                  <div className="text-right">
+                    <div className="flex items-center gap-1 mt-0.5 justify-end">
+                      {isWin ? (
+                        <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
+                      ) : (
+                        <TrendingDown className="w-3.5 h-3.5 text-rose-400" />
+                      )}
+                      <span className={`text-base font-black ${isWin ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        {isWin ? '+' : ''}{Number(trade.pnl).toFixed(2)}
+                      </span>
+                    </div>
                   </div>
                 </div>
 
-                {/* Extra insight flags */}
+                {/* Extra expectation flag */}
                 {trade.performed_as_expected !== undefined && (
                   <div className="mt-3 pt-3 border-t border-slate-800/30 flex justify-between text-[10px] text-slate-500">
                     <span>Performance Expectation Alignment:</span>
