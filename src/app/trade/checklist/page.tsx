@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Check, Loader2, Play, ShieldCheck, AlertCircle } from 'lucide-react'
+import { ArrowLeft, Check, Loader2, Play, ShieldCheck, AlertCircle, Plus, Trash2, Layers } from 'lucide-react'
 import { getActiveStrategyWithRules, placeTrade } from '../actions'
 
 interface Rule {
@@ -17,30 +17,38 @@ interface Strategy {
   name: string
 }
 
+interface LegState {
+  action: 'BUY' | 'SELL'
+  optionType: 'CALL' | 'PUT' | 'NONE'
+  entryPrice: string
+  lotSize: string
+}
+
 export default function ChecklistAndPlacePage() {
   const router = useRouter()
   const [loading, setLoading] = useState(true)
   const [strategy, setStrategy] = useState<Strategy | null>(null)
   const [rules, setRules] = useState<Rule[]>([])
   
-  // Checklist checked state
+  // Checklist states
   const [checkedRules, setCheckedRules] = useState<Record<string, boolean>>({})
   const [allRulesChecked, setAllRulesChecked] = useState(false)
   const [hasAnyStrategy, setHasAnyStrategy] = useState(true)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
-  // Form states
+  // Trade Details & Legs
   const [symbol, setSymbol] = useState('')
-  const [direction, setDirection] = useState<'BUY' | 'SELL'>('BUY')
-  const [entryPrice, setEntryPrice] = useState('')
   const [sl, setSl] = useState('')
   const [tp, setTp] = useState('')
-  const [quantity, setQuantity] = useState('')
   const [entryDatetime, setEntryDatetime] = useState('')
   
+  const [legs, setLegs] = useState<LegState[]>([
+    { action: 'BUY', optionType: 'NONE', entryPrice: '', lotSize: '1' }
+  ])
+
   const [isPending, startTransition] = useTransition()
 
-  // Setup current local time as default datetime-local format
+  // Set default datetime to local ISO format
   useEffect(() => {
     const now = new Date()
     const offset = now.getTimezoneOffset() * 60000
@@ -48,14 +56,13 @@ export default function ChecklistAndPlacePage() {
     setEntryDatetime(localISOTime)
   }, [])
 
-  // Load strategy and rules
+  // Fetch active strategy
   useEffect(() => {
     async function load() {
       const res = await getActiveStrategyWithRules()
       if (res.error) {
         if (res.error === 'no_active_strategy') {
           setHasAnyStrategy(res.hasAnyStrategy ?? false)
-          // If no strategies exist, redirect straight to create
           if (!res.hasAnyStrategy) {
             router.push('/strategies/create')
           }
@@ -69,7 +76,6 @@ export default function ChecklistAndPlacePage() {
       if (res.strategy && res.rules) {
         setStrategy(res.strategy)
         setRules(res.rules)
-        // Initialize checked state
         const initialChecked: Record<string, boolean> = {}
         res.rules.forEach(r => {
           initialChecked[r.id] = false
@@ -81,7 +87,7 @@ export default function ChecklistAndPlacePage() {
     load()
   }, [router])
 
-  // Check if all rules are checked
+  // Check if checklist complete
   useEffect(() => {
     if (rules.length === 0) {
       setAllRulesChecked(false)
@@ -98,43 +104,53 @@ export default function ChecklistAndPlacePage() {
     }))
   }
 
+  // Legs builder actions
+  const handleAddLeg = () => {
+    setLegs([
+      ...legs,
+      { action: 'BUY', optionType: 'NONE', entryPrice: '', lotSize: '1' }
+    ])
+  }
+
+  const handleRemoveLeg = (idx: number) => {
+    if (legs.length === 1) return
+    const newLegs = [...legs]
+    newLegs.splice(idx, 1)
+    setLegs(newLegs)
+  }
+
+  const handleLegChange = (idx: number, field: keyof LegState, value: any) => {
+    const newLegs = [...legs]
+    newLegs[idx] = {
+      ...newLegs[idx],
+      [field]: value
+    }
+    setLegs(newLegs)
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setErrorMessage(null)
 
     if (!strategy) return
 
-    if (!symbol || !entryPrice || !sl || !tp || !entryDatetime) {
-      setErrorMessage('Please fill in all required fields.')
+    if (!symbol || !sl || !tp || !entryDatetime) {
+      setErrorMessage('Please fill in all general trade targets.')
       return
     }
 
-    const numEntry = Number(entryPrice)
-    const numSl = Number(sl)
-    const numTp = Number(tp)
+    // Validate legs data
+    for (let i = 0; i < legs.length; i++) {
+      const leg = legs[i]
+      const price = Number(leg.entryPrice)
+      const lot = Number(leg.lotSize)
 
-    if (isNaN(numEntry) || isNaN(numSl) || isNaN(numTp)) {
-      setErrorMessage('Prices must be valid numbers.')
-      return
-    }
-
-    // Safety checks on SL/TP rules
-    if (direction === 'BUY') {
-      if (numSl >= numEntry) {
-        setErrorMessage('For a BUY trade, Stop Loss must be less than Entry Price.')
+      if (isNaN(price) || price <= 0) {
+        setErrorMessage(`Leg #${i + 1} has an invalid Entry Price.`)
         return
       }
-      if (numTp <= numEntry) {
-        setErrorMessage('For a BUY trade, Take Profit must be greater than Entry Price.')
-        return
-      }
-    } else {
-      if (numSl <= numEntry) {
-        setErrorMessage('For a SELL trade, Stop Loss must be greater than Entry Price.')
-        return
-      }
-      if (numTp >= numEntry) {
-        setErrorMessage('For a SELL trade, Take Profit must be less than Entry Price.')
+      if (isNaN(lot) || lot <= 0) {
+        setErrorMessage(`Leg #${i + 1} has an invalid Lot Size.`)
         return
       }
     }
@@ -145,16 +161,21 @@ export default function ChecklistAndPlacePage() {
         checked: checkedRules[r.id] || false
       }))
 
+      const legsArray = legs.map(l => ({
+        action: l.action,
+        optionType: l.optionType,
+        entryPrice: Number(l.entryPrice),
+        lotSize: Number(l.lotSize)
+      }))
+
       const result = await placeTrade({
         strategyId: strategy.id,
         symbol,
-        direction,
-        entryPrice: numEntry,
-        sl: numSl,
-        tp: numTp,
-        quantity: quantity ? Number(quantity) : null,
+        sl: Number(sl),
+        tp: Number(tp),
         entryDatetime: new Date(entryDatetime).toISOString(),
-        checklist: checklistArray
+        checklist: checklistArray,
+        legs: legsArray
       })
 
       if (result?.error) {
@@ -170,7 +191,7 @@ export default function ChecklistAndPlacePage() {
     return (
       <main className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center py-20">
         <Loader2 className="w-10 h-10 animate-spin text-emerald-400 mb-4" />
-        <p className="text-sm text-slate-500">Checking strategies...</p>
+        <p className="text-sm text-slate-500">Checking strategy details...</p>
       </main>
     )
   }
@@ -181,11 +202,11 @@ export default function ChecklistAndPlacePage() {
         <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-500 mb-6">
           <AlertCircle className="w-8 h-8" />
         </div>
-        <h2 className="text-xl font-bold text-slate-200">No Active Strategy Selected</h2>
+        <h2 className="text-xl font-bold text-slate-200">No Active Strategy</h2>
         <p className="text-sm text-slate-400 mt-2 max-w-xs">
           {hasAnyStrategy 
-            ? 'You have strategies, but none are set as active. Set an active strategy first.' 
-            : 'Create your first strategy to start tracking your trades.'}
+            ? 'Set a strategy as active in your strategies tab to continue.' 
+            : 'Build your first trading strategy rules checklist to start.'}
         </p>
         <Link
           href="/strategies"
@@ -208,7 +229,7 @@ export default function ChecklistAndPlacePage() {
         </Link>
         <div>
           <h1 className="text-xl font-bold leading-tight">Prepare Trade</h1>
-          <p className="text-xs text-slate-500 font-semibold uppercase tracking-wider mt-0.5 text-emerald-400">
+          <p className="text-xs text-emerald-400 font-semibold uppercase tracking-wider mt-0.5">
             Strategy: {strategy.name}
           </p>
         </div>
@@ -231,7 +252,7 @@ export default function ChecklistAndPlacePage() {
         </div>
 
         <p className="text-xs text-slate-400 mb-4 leading-relaxed">
-          Verify and check every rule of your strategy. ALL boxes must be checked before the trade entry form will be unlocked.
+          Verify and check every rule of your strategy. ALL boxes must be checked before the trade entry form will unlock.
         </p>
 
         <div className="space-y-3">
@@ -273,146 +294,204 @@ export default function ChecklistAndPlacePage() {
           ? 'opacity-100 scale-100 pointer-events-auto h-auto' 
           : 'opacity-30 scale-95 pointer-events-none select-none blur-[1px]'
       }`}>
-        <div className="bg-slate-900/40 border border-slate-800/80 rounded-3xl p-5 shadow-sm">
-          <div className="flex items-center gap-2 mb-6">
+        <div className="bg-slate-900/40 border border-slate-800/80 rounded-3xl p-5 shadow-sm space-y-6">
+          <div className="flex items-center gap-2">
             <Play className="w-4 h-4 text-emerald-400 fill-emerald-400" />
             <h2 className="text-sm font-bold text-slate-300 uppercase tracking-wider">
-              Trade Details
+              Trade parameters
             </h2>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-5">
-            {/* Symbol & Direction */}
-            <div className="grid grid-cols-2 gap-4">
+          <form onSubmit={handleSubmit} className="space-y-6">
+            {/* General parameters */}
+            <div className="space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
-                  Symbol
+                  Symbol / Ticker
                 </label>
                 <input
                   type="text"
                   required={allRulesChecked}
                   disabled={!allRulesChecked}
-                  placeholder="e.g. BTCUSD, NIFTY"
+                  placeholder="e.g. BTCUSD, AAPL, EURUSD"
                   value={symbol}
                   onChange={(e) => setSymbol(e.target.value)}
                   className="block w-full rounded-2xl border-0 bg-slate-900 px-4 py-3.5 text-slate-100 placeholder:text-slate-600 focus:ring-2 focus:ring-emerald-500 sm:text-sm outline-none uppercase font-bold"
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
-                  Direction
-                </label>
-                <div className="grid grid-cols-2 p-1 bg-slate-950 rounded-2xl border border-slate-800/80">
-                  <button
-                    type="button"
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-rose-400 uppercase tracking-wider mb-2">
+                    Net SL Target
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    required={allRulesChecked}
                     disabled={!allRulesChecked}
-                    onClick={() => setDirection('BUY')}
-                    className={`py-2 rounded-xl text-xs font-extrabold transition-all duration-200 select-none ${
-                      direction === 'BUY'
-                        ? 'bg-emerald-500 text-slate-950 font-bold shadow-md shadow-emerald-500/10'
-                        : 'text-slate-400'
-                    }`}
-                  >
-                    BUY
-                  </button>
-                  <button
-                    type="button"
+                    placeholder="SL Price"
+                    value={sl}
+                    onChange={(e) => setSl(e.target.value)}
+                    className="block w-full rounded-2xl border-0 bg-slate-900 px-4 py-3.5 text-slate-100 placeholder:text-slate-600 focus:ring-2 focus:ring-rose-500 sm:text-sm outline-none text-rose-200"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-emerald-400 uppercase tracking-wider mb-2">
+                    Net TP Target
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    required={allRulesChecked}
                     disabled={!allRulesChecked}
-                    onClick={() => setDirection('SELL')}
-                    className={`py-2 rounded-xl text-xs font-extrabold transition-all duration-200 select-none ${
-                      direction === 'SELL'
-                        ? 'bg-rose-500 text-slate-950 font-bold shadow-md shadow-rose-500/10'
-                        : 'text-slate-400'
-                    }`}
-                  >
-                    SELL
-                  </button>
+                    placeholder="TP Price"
+                    value={tp}
+                    onChange={(e) => setTp(e.target.value)}
+                    className="block w-full rounded-2xl border-0 bg-slate-900 px-4 py-3.5 text-slate-100 placeholder:text-slate-600 focus:ring-2 focus:ring-emerald-500 sm:text-sm outline-none text-emerald-200"
+                  />
                 </div>
               </div>
-            </div>
-
-            {/* Price Inputs Grid */}
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
-                  Entry Price
-                </label>
-                <input
-                  type="number"
-                  step="any"
-                  required={allRulesChecked}
-                  disabled={!allRulesChecked}
-                  placeholder="0.00"
-                  value={entryPrice}
-                  onChange={(e) => setEntryPrice(e.target.value)}
-                  className="block w-full rounded-2xl border-0 bg-slate-900 px-4 py-3.5 text-slate-100 placeholder:text-slate-600 focus:ring-2 focus:ring-emerald-500 sm:text-sm outline-none"
-                />
-              </div>
 
               <div>
                 <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
-                  Quantity (Optional)
+                  Entry Date & Time
                 </label>
                 <input
-                  type="number"
-                  step="any"
+                  type="datetime-local"
+                  required={allRulesChecked}
                   disabled={!allRulesChecked}
-                  placeholder="1.0"
-                  value={quantity}
-                  onChange={(e) => setQuantity(e.target.value)}
-                  className="block w-full rounded-2xl border-0 bg-slate-900 px-4 py-3.5 text-slate-100 placeholder:text-slate-600 focus:ring-2 focus:ring-emerald-500 sm:text-sm outline-none"
+                  value={entryDatetime}
+                  onChange={(e) => setEntryDatetime(e.target.value)}
+                  className="block w-full rounded-2xl border-0 bg-slate-900 px-4 py-3.5 text-slate-100 focus:ring-2 focus:ring-emerald-500 sm:text-sm outline-none"
                 />
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 text-rose-400">
-                  Stop Loss (SL)
-                </label>
-                <input
-                  type="number"
-                  step="any"
-                  required={allRulesChecked}
+            {/* LEGS SECTION */}
+            <div className="space-y-4 pt-4 border-t border-slate-800/40">
+              <div className="flex justify-between items-center">
+                <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <Layers className="w-4 h-4 text-emerald-400" />
+                  Positions / Legs ({legs.length})
+                </h3>
+                <button
+                  type="button"
                   disabled={!allRulesChecked}
-                  placeholder="SL Level"
-                  value={sl}
-                  onChange={(e) => setSl(e.target.value)}
-                  className="block w-full rounded-2xl border-0 bg-slate-900 px-4 py-3.5 text-slate-100 placeholder:text-slate-600 focus:ring-2 focus:ring-rose-500 sm:text-sm outline-none text-rose-200"
-                />
+                  onClick={handleAddLeg}
+                  className="flex items-center gap-1 text-xs font-semibold text-emerald-400 hover:text-emerald-300 transition-colors disabled:opacity-50"
+                >
+                  <Plus className="w-4 h-4" />
+                  Add Leg
+                </button>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 text-emerald-400">
-                  Take Profit (TP)
-                </label>
-                <input
-                  type="number"
-                  step="any"
-                  required={allRulesChecked}
-                  disabled={!allRulesChecked}
-                  placeholder="TP Level"
-                  value={tp}
-                  onChange={(e) => setTp(e.target.value)}
-                  className="block w-full rounded-2xl border-0 bg-slate-900 px-4 py-3.5 text-slate-100 placeholder:text-slate-600 focus:ring-2 focus:ring-emerald-500 sm:text-sm outline-none text-emerald-200"
-                />
-              </div>
-            </div>
+              {/* Legs mapping */}
+              <div className="space-y-4">
+                {legs.map((leg, idx) => (
+                  <div key={idx} className="bg-slate-950/60 border border-slate-850 p-4 rounded-2xl relative space-y-4">
+                    <div className="flex justify-between items-center">
+                      <span className="text-xs font-bold text-slate-500">Leg #{idx + 1}</span>
+                      {legs.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveLeg(idx)}
+                          className="p-1 rounded text-slate-600 hover:text-rose-400 hover:bg-rose-500/10 transition-all"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
 
-            {/* Entry Date & Time */}
-            <div>
-              <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
-                Entry Date & Time
-              </label>
-              <input
-                type="datetime-local"
-                required={allRulesChecked}
-                disabled={!allRulesChecked}
-                value={entryDatetime}
-                onChange={(e) => setEntryDatetime(e.target.value)}
-                className="block w-full rounded-2xl border-0 bg-slate-900 px-4 py-3.5 text-slate-100 focus:ring-2 focus:ring-emerald-500 sm:text-sm outline-none"
-              />
+                    <div className="grid grid-cols-2 gap-3">
+                      {/* Action selector */}
+                      <div>
+                        <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Action</span>
+                        <div className="grid grid-cols-2 p-0.5 bg-slate-900 rounded-xl border border-slate-800">
+                          <button
+                            type="button"
+                            onClick={() => handleLegChange(idx, 'action', 'BUY')}
+                            className={`py-1 text-[10px] font-extrabold uppercase rounded-lg transition-all ${
+                              leg.action === 'BUY'
+                                ? 'bg-emerald-500 text-slate-950 shadow'
+                                : 'text-slate-500'
+                            }`}
+                          >
+                            Buy / Long
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleLegChange(idx, 'action', 'SELL')}
+                            className={`py-1 text-[10px] font-extrabold uppercase rounded-lg transition-all ${
+                              leg.action === 'SELL'
+                                ? 'bg-rose-500 text-slate-950 shadow'
+                                : 'text-slate-500'
+                            }`}
+                          >
+                            Sell / Short
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Option Type Selector */}
+                      <div>
+                        <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Type</span>
+                        <div className="grid grid-cols-3 p-0.5 bg-slate-900 rounded-xl border border-slate-800">
+                          {['CALL', 'PUT', 'NONE'].map(type => (
+                            <button
+                              key={type}
+                              type="button"
+                              onClick={() => handleLegChange(idx, 'optionType', type)}
+                              className={`py-1 text-[9px] font-extrabold uppercase rounded-lg transition-all ${
+                                leg.optionType === type
+                                  ? 'bg-slate-800 text-slate-200 shadow'
+                                  : 'text-slate-500'
+                              }`}
+                            >
+                              {type === 'NONE' ? 'SPOT' : type}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      {/* Entry price */}
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                          Entry Price
+                        </label>
+                        <input
+                          type="number"
+                          step="any"
+                          required={allRulesChecked}
+                          placeholder="Price"
+                          value={leg.entryPrice}
+                          onChange={(e) => handleLegChange(idx, 'entryPrice', e.target.value)}
+                          className="block w-full rounded-xl border-0 bg-slate-900 px-3 py-2.5 text-xs text-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none"
+                        />
+                      </div>
+
+                      {/* Lot size */}
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                          Lot Size / Qty
+                        </label>
+                        <input
+                          type="number"
+                          step="any"
+                          required={allRulesChecked}
+                          placeholder="Lots"
+                          value={leg.lotSize}
+                          onChange={(e) => handleLegChange(idx, 'lotSize', e.target.value)}
+                          className="block w-full rounded-xl border-0 bg-slate-900 px-3 py-2.5 text-xs text-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
 
             {/* Submit */}
@@ -420,7 +499,7 @@ export default function ChecklistAndPlacePage() {
               <button
                 type="submit"
                 disabled={isPending || !allRulesChecked}
-                className="flex w-full justify-center rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 px-4 py-4 text-sm font-bold text-slate-950 shadow-lg shadow-emerald-500/15 hover:from-emerald-400 hover:to-teal-400 active:scale-[0.98] transition-all disabled:opacity-50 select-none"
+                className="flex w-full justify-center rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 px-4 py-4 text-sm font-bold text-slate-950 shadow-lg shadow-emerald-500/15 hover:from-emerald-400 hover:to-teal-400 active:scale-[0.98] transition-all disabled:opacity-50 select-none font-bold"
               >
                 {isPending ? (
                   <span className="flex items-center gap-2">
@@ -428,7 +507,7 @@ export default function ChecklistAndPlacePage() {
                     Placing Trade...
                   </span>
                 ) : (
-                  'Place Trade'
+                  'Place Multi-Leg Trade'
                 )}
               </button>
             </div>

@@ -78,12 +78,8 @@ export default async function Home() {
               <h3 className="text-3xl font-black tracking-tight text-slate-100">
                 {activeTrade.symbol}
               </h3>
-              <span className={`px-2 py-0.5 rounded-lg text-xs font-black uppercase tracking-wider ${
-                activeTrade.direction === 'BUY' 
-                  ? 'bg-emerald-500/10 text-emerald-400' 
-                  : 'bg-rose-500/10 text-rose-400'
-              }`}>
-                {activeTrade.direction}
+              <span className="px-2 py-0.5 rounded-lg text-[9px] bg-slate-800 text-slate-300 font-extrabold uppercase tracking-wider">
+                {activeTrade.trade_legs?.length || 0} Leg{(activeTrade.trade_legs?.length || 0) !== 1 ? 's' : ''}
               </span>
             </div>
 
@@ -91,17 +87,35 @@ export default async function Home() {
               Strategy: {activeTrade.strategies?.name || 'Manual'}
             </p>
 
-            <div className="grid grid-cols-3 gap-2 mt-6 pt-5 border-t border-slate-800/40 text-center">
-              <div>
-                <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">Entry</span>
-                <span className="block text-sm font-extrabold text-slate-200 mt-1">{activeTrade.entry_price}</span>
-              </div>
+            {/* Render active trade legs */}
+            <div className="space-y-2 mt-5 border-t border-slate-850 pt-4">
+              {(activeTrade.trade_legs || []).map((leg: any, idx: number) => (
+                <div key={leg.id} className="flex justify-between items-center bg-slate-950/40 border border-slate-900 rounded-xl p-2.5 text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className={`px-1.5 py-0.5 rounded text-[8px] font-black uppercase ${
+                      leg.action === 'BUY' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'
+                    }`}>
+                      {leg.action === 'BUY' ? 'BUY' : 'SELL'}
+                    </span>
+                    <span className="px-1.5 py-0.5 rounded bg-slate-800/80 text-slate-300 text-[8px] font-bold uppercase">
+                      {leg.option_type === 'NONE' ? 'SPOT' : leg.option_type}
+                    </span>
+                  </div>
+                  <div className="text-right text-slate-400">
+                    <span className="font-bold text-slate-300">{leg.entry_price}</span>
+                    <span className="text-[10px] text-slate-500 ml-1.5">({leg.lot_size} Lots)</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-2 gap-4 mt-5 pt-4 border-t border-slate-850 text-center">
               <div>
                 <span className="block text-[10px] font-bold text-rose-500/80 uppercase tracking-wider">Stop Loss</span>
                 <span className="block text-sm font-extrabold text-rose-400/90 mt-1">{activeTrade.sl}</span>
               </div>
               <div>
-                <span className="block text-[10px] font-bold text-emerald-500/80 uppercase tracking-wider">Target</span>
+                <span className="block text-[10px] font-bold text-emerald-500/80 uppercase tracking-wider">Take Profit</span>
                 <span className="block text-sm font-extrabold text-emerald-400/90 mt-1">{activeTrade.tp}</span>
               </div>
             </div>

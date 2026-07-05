@@ -8,9 +8,10 @@ export async function getActiveTrade() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return null
 
+  // Fetch open trade along with its legs and strategy name
   const { data, error } = await supabase
     .from('trades')
-    .select('*, strategies(name)')
+    .select('*, strategies(name), trade_legs(*)')
     .eq('user_id', user.id)
     .eq('status', 'OPEN')
     .maybeSingle()
@@ -28,7 +29,6 @@ export async function getActiveStrategyWithRules() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Not authenticated' }
 
-  // Get active strategy
   const { data: strategy, error: stratError } = await supabase
     .from('strategies')
     .select('id, name')
@@ -42,7 +42,6 @@ export async function getActiveStrategyWithRules() {
   }
 
   if (!strategy) {
-    // Check if they have ANY strategy at all to recommend setting active
     const { data: anyStrat } = await supabase
       .from('strategies')
       .select('id')
@@ -57,7 +56,6 @@ export async function getActiveStrategyWithRules() {
     }
   }
 
-  // Get rules
   const { data: rules, error: rulesError } = await supabase
     .from('strategy_rules')
     .select('id, rule_text, sort_order')
@@ -74,22 +72,31 @@ export async function getActiveStrategyWithRules() {
   }
 }
 
+interface PlaceLegParam {
+  action: 'BUY' | 'SELL'
+  optionType: 'CALL' | 'PUT' | 'NONE'
+  entryPrice: number
+  lotSize: number
+}
+
 interface PlaceTradeParams {
   strategyId: string
   symbol: string
-  direction: 'BUY' | 'SELL'
-  entryPrice: number
   sl: number
   tp: number
-  quantity: number | null
   entryDatetime: string
   checklist: { ruleId: string; checked: boolean }[]
+  legs: PlaceLegParam[]
 }
 
 export async function placeTrade(params: PlaceTradeParams) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Not authenticated.' }
+
+  if (params.legs.length === 0) {
+    return { error: 'At least one trade leg is required.' }
+  }
 
   // 1. Verify no active trade is open
   const activeTrade = await getActiveTrade()
@@ -103,15 +110,13 @@ export async function placeTrade(params: PlaceTradeParams) {
     return { error: 'Discipline error: All rules in the checklist must be verified and checked.' }
   }
 
-  // 3. Insert the trade
+  // 3. Insert parent trade (without direction and entry price, since they are on legs)
   const { data: trade, error: tradeError } = await supabase
     .from('trades')
     .insert({
       user_id: user.id,
       strategy_id: params.strategyId,
       symbol: params.symbol.toUpperCase().trim(),
-      direction: params.direction,
-      entry_price: params.entryPrice,
       sl: params.sl,
       tp: params.tp,
       entry_datetime: params.entryDatetime,
@@ -124,7 +129,26 @@ export async function placeTrade(params: PlaceTradeParams) {
     return { error: tradeError?.message || 'Failed to place trade.' }
   }
 
-  // 4. Save checklist results
+  // 4. Insert legs
+  const legRows = params.legs.map(leg => ({
+    trade_id: trade.id,
+    action: leg.action,
+    option_type: leg.optionType,
+    entry_price: leg.entryPrice,
+    lot_size: leg.lotSize,
+  }))
+
+  const { error: legsError } = await supabase
+    .from('trade_legs')
+    .insert(legRows)
+
+  if (legsError) {
+    // rollback trade if legs failed
+    await supabase.from('trades').delete().eq('id', trade.id)
+    return { error: legsError.message }
+  }
+
+  // 5. Save checklist results
   const checklistRows = params.checklist.map(item => ({
     trade_id: trade.id,
     strategy_rule_id: item.ruleId,
@@ -147,12 +171,17 @@ export async function placeTrade(params: PlaceTradeParams) {
   return { success: true }
 }
 
+interface CloseLegParam {
+  legId: string
+  exitPrice: number
+}
+
 interface CloseTradeParams {
   tradeId: string
-  exitPrice: number
   exitDatetime: string
   performedAsExpected: boolean
   followedSlTpRules: boolean
+  legs: CloseLegParam[]
 }
 
 export async function closeTrade(params: CloseTradeParams) {
@@ -160,10 +189,10 @@ export async function closeTrade(params: CloseTradeParams) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Not authenticated.' }
 
-  // 1. Fetch the trade
+  // 1. Fetch the trade along with its current legs
   const { data: trade, error: fetchError } = await supabase
     .from('trades')
-    .select('*')
+    .select('*, trade_legs(*)')
     .eq('id', params.tradeId)
     .eq('user_id', user.id)
     .single()
@@ -172,36 +201,44 @@ export async function closeTrade(params: CloseTradeParams) {
     return { error: fetchError?.message || 'Trade not found.' }
   }
 
-  const entryPrice = Number(trade.entry_price)
-  const exitPrice = Number(params.exitPrice)
-  const sl = Number(trade.sl)
-  const direction = trade.direction
+  let totalPnl = 0
 
-  // Calculate P&L: pnl = (exit - entry) for BUY, (entry - exit) for SELL.
-  // We don't have quantity stored in schema since quantity is optional in prompt's table definition
-  // but it's optional for display. Let's store P/L as price differential (or multiplier if they want, let's keep it as difference)
-  // Wait! The prompt says "Quantity/Lot size (optional)" in description, but in the trades table schema it was:
-  // trades(id, user_id, strategy_id, symbol, direction, entry_price, sl, tp, entry_datetime, exit_price, exit_datetime, pnl, pnl_type, status, performed_as_expected, followed_sl_tp_rules, created_at)
-  // It has pnl and pnl_type, but no quantity column listed in the schema.
-  // Wait, let's calculate P/L in points/dollars and assume a standard multiplier of 1 for the basic P/L if no quantity.
-  // Or we can save P/L directly. Let's do `pnl = (direction === 'BUY' ? (exitPrice - entryPrice) : (entryPrice - exitPrice))`
-  const pnlMultiplier = 1
-  const rawPnl = direction === 'BUY' ? (exitPrice - entryPrice) : (entryPrice - exitPrice)
-  const computedPnl = rawPnl * pnlMultiplier
+  // 2. Loop and update each leg's exit parameters and P&L
+  for (const closeLeg of params.legs) {
+    const originalLeg = (trade.trade_legs || []).find((l: any) => l.id === closeLeg.legId)
+    if (!originalLeg) continue
 
-  // Calculate R-Multiple:
-  // Risk (R) = abs(entry - sl)
-  const risk = Math.abs(entryPrice - sl)
-  const rMultiple = risk > 0 ? rawPnl / risk : 0
+    const entry = Number(originalLeg.entry_price)
+    const exit = Number(closeLeg.exitPrice)
+    const lotSize = Number(originalLeg.lot_size)
+    const action = originalLeg.action
 
-  // Update trade record
+    // P/L calculation: 
+    // BUY: (Exit - Entry) * Lot Size
+    // SELL: (Entry - Exit) * Lot Size
+    const legPnl = action === 'BUY' ? (exit - entry) * lotSize : (entry - exit) * lotSize
+    totalPnl += legPnl
+
+    const { error: legUpdateError } = await supabase
+      .from('trade_legs')
+      .update({
+        exit_price: exit,
+        exit_datetime: params.exitDatetime,
+        pnl: legPnl
+      })
+      .eq('id', closeLeg.legId)
+
+    if (legUpdateError) {
+      return { error: legUpdateError.message }
+    }
+  }
+
+  // 3. Update the parent trade record
   const { error: updateError } = await supabase
     .from('trades')
     .update({
-      exit_price: exitPrice,
       exit_datetime: params.exitDatetime,
-      pnl: computedPnl,
-      pnl_type: 'amount', // We'll label as amount
+      pnl: totalPnl,
       status: 'CLOSED',
       performed_as_expected: params.performedAsExpected,
       followed_sl_tp_rules: params.followedSlTpRules,
@@ -230,7 +267,7 @@ export async function getTradeById(id: string) {
 
   const { data, error } = await supabase
     .from('trades')
-    .select('*, strategies(name)')
+    .select('*, strategies(name), trade_legs(*)')
     .eq('id', id)
     .eq('user_id', user.id)
     .single()
@@ -246,7 +283,7 @@ export async function getClosedTrades() {
 
   const { data, error } = await supabase
     .from('trades')
-    .select('*, strategies(name)')
+    .select('*, strategies(name), trade_legs(*)')
     .eq('user_id', user.id)
     .eq('status', 'CLOSED')
     .order('exit_datetime', { ascending: false })

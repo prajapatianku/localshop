@@ -6,20 +6,27 @@ import { Calendar, Filter, Loader2, RefreshCw, Smile, AlertCircle, ArrowLeft, Ar
 import { getClosedTrades } from '../trade/actions'
 import { getStrategies } from '../strategies/actions'
 
+interface TradeLeg {
+  id: string
+  action: 'BUY' | 'SELL'
+  option_type: 'CALL' | 'PUT' | 'NONE'
+  entry_price: number
+  exit_price: number | null
+  lot_size: number
+  pnl: number | null
+}
+
 interface Trade {
   id: string
   symbol: string
-  direction: 'BUY' | 'SELL'
-  entry_price: number
-  exit_price: number
   entry_datetime: string
   exit_datetime: string
   pnl: number
-  pnl_type: string
   status: string
   performed_as_expected: boolean
   followed_sl_tp_rules: boolean
   strategies?: { name: string }
+  trade_legs?: TradeLeg[]
 }
 
 interface Strategy {
@@ -268,12 +275,8 @@ export default function JournalPage() {
                       </span>
                     )}
 
-                    <span className={`px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase tracking-wide ${
-                      trade.direction === 'BUY' 
-                        ? 'bg-emerald-500/10 text-emerald-400' 
-                        : 'bg-rose-500/10 text-rose-400'
-                    }`}>
-                      {trade.direction}
+                    <span className="px-1.5 py-0.5 rounded text-[8px] bg-slate-800 text-slate-400 font-extrabold uppercase tracking-wide">
+                      {trade.trade_legs?.length || 0} Leg{(trade.trade_legs?.length || 0) !== 1 ? 's' : ''}
                     </span>
                   </div>
                 </div>
@@ -283,31 +286,55 @@ export default function JournalPage() {
                   Strategy: <span className="font-semibold text-slate-400">{trade.strategies?.name || 'Manual'}</span>
                 </p>
 
-                {/* Price mapping & PNL */}
-                <div className="mt-4 pt-3 border-t border-slate-800/30 flex items-center justify-between">
-                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-left">
-                    <div>
-                      <span className="text-[9px] text-slate-500 uppercase tracking-wider block">Entry</span>
-                      <span className="text-xs font-semibold text-slate-300 block">{trade.entry_price}</span>
-                    </div>
-                    <div>
-                      <span className="text-[9px] text-slate-500 uppercase tracking-wider block">Exit</span>
-                      <span className="text-xs font-semibold text-slate-300 block">{trade.exit_price}</span>
-                    </div>
-                  </div>
+                {/* Legs list */}
+                <div className="mt-4 pt-3 border-t border-slate-800/30 space-y-2">
+                  {(trade.trade_legs || []).map((leg) => {
+                    const legPnl = Number(leg.pnl || 0)
+                    const legIsWin = legPnl >= 0
+                    return (
+                      <div key={leg.id} className="flex justify-between items-center text-xs text-slate-400 bg-slate-950/30 rounded-xl p-2 border border-slate-900/60">
+                        <div className="flex items-center gap-1.5">
+                          <span className={`px-1 rounded text-[7px] font-black uppercase ${
+                            leg.action === 'BUY' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'
+                          }`}>
+                            {leg.action === 'BUY' ? 'BUY' : 'SELL'}
+                          </span>
+                          <span className="px-1 rounded bg-slate-900 text-slate-400 text-[7px] font-bold uppercase">
+                            {leg.option_type === 'NONE' ? 'SPOT' : leg.option_type}
+                          </span>
+                          <span className="text-[10px] text-slate-500">({leg.lot_size} Lots)</span>
+                        </div>
+                        <div className="flex gap-4">
+                          <div className="text-left text-[11px]">
+                            <span className="text-[9px] text-slate-600 block leading-none">In / Out</span>
+                            <span>{leg.entry_price} → {leg.exit_price || '-'}</span>
+                          </div>
+                          {leg.exit_price !== null && (
+                            <div className="text-right text-[11px] min-w-[55px]">
+                              <span className="text-[9px] text-slate-600 block leading-none">PnL</span>
+                              <span className={`font-bold ${legIsWin ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                {legIsWin ? '+' : ''}{legPnl.toFixed(2)}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
 
-                  <div className="text-right">
-                    <span className="text-[9px] text-slate-500 uppercase tracking-wider block">Profit / Loss</span>
-                    <div className="flex items-center gap-1 mt-0.5 justify-end">
-                      {isWin ? (
-                        <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
-                      ) : (
-                        <TrendingDown className="w-3.5 h-3.5 text-rose-400" />
-                      )}
-                      <span className={`text-base font-black ${isWin ? 'text-emerald-400' : 'text-rose-400'}`}>
-                        {isWin ? '+' : ''}{Number(trade.pnl).toFixed(2)}
-                      </span>
-                    </div>
+                {/* Aggregated Total Result */}
+                <div className="mt-3 pt-3 border-t border-slate-800/30 flex justify-between items-center">
+                  <span className="text-[10px] text-slate-500 uppercase tracking-wider">Total Net Result</span>
+                  <div className="flex items-center gap-1">
+                    {isWin ? (
+                      <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
+                    ) : (
+                      <TrendingDown className="w-3.5 h-3.5 text-rose-400" />
+                    )}
+                    <span className={`text-base font-black ${isWin ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      {isWin ? '+' : ''}{Number(trade.pnl).toFixed(2)}
+                    </span>
                   </div>
                 </div>
 

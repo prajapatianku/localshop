@@ -3,21 +3,28 @@
 import React, { useState, useEffect, use, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Loader2, Award, Info, AlertTriangle, CheckCircle2, ChevronRight } from 'lucide-react'
+import { ArrowLeft, Loader2, Award, Info, AlertTriangle, CheckCircle2, ChevronRight, Layers } from 'lucide-react'
 import { getTradeById, closeTrade } from '../../actions'
 
 interface CloseTradePageProps {
   params: Promise<{ id: string }>
 }
 
+interface TradeLeg {
+  id: string
+  action: 'BUY' | 'SELL'
+  option_type: 'CALL' | 'PUT' | 'NONE'
+  entry_price: number
+  lot_size: number
+}
+
 interface Trade {
   id: string
   symbol: string
-  direction: 'BUY' | 'SELL'
-  entry_price: number
   sl: number
   tp: number
   strategies?: { name: string }
+  trade_legs?: TradeLeg[]
 }
 
 export default function CloseTradePage({ params }: CloseTradePageProps) {
@@ -29,10 +36,12 @@ export default function CloseTradePage({ params }: CloseTradePageProps) {
   const [error, setError] = useState<string | null>(null)
   
   // Form states
-  const [exitPrice, setExitPrice] = useState('')
   const [exitDatetime, setExitDatetime] = useState('')
   const [performedAsExpected, setPerformedAsExpected] = useState<boolean | null>(null)
   const [followedSlTpRules, setFollowedSlTpRules] = useState<boolean | null>(null)
+  
+  // Exits states mapped by legId
+  const [legExits, setLegExits] = useState<Record<string, string>>({})
 
   // Feedback states
   const [showFeedbackModal, setShowFeedbackModal] = useState(false)
@@ -40,7 +49,7 @@ export default function CloseTradePage({ params }: CloseTradePageProps) {
 
   const [isPending, startTransition] = useTransition()
 
-  // Set default exit date time to current local time
+  // Set default exit date time to local current time
   useEffect(() => {
     const now = new Date()
     const offset = now.getTimezoneOffset() * 60000
@@ -55,6 +64,12 @@ export default function CloseTradePage({ params }: CloseTradePageProps) {
         const data = await getTradeById(id)
         if (data) {
           setTrade(data as unknown as Trade)
+          // Initialize exits mapping
+          const initialExits: Record<string, string> = {}
+          data.trade_legs?.forEach((l: any) => {
+            initialExits[l.id] = ''
+          })
+          setLegExits(initialExits)
         } else {
           setError('Trade record not found.')
         }
@@ -67,49 +82,90 @@ export default function CloseTradePage({ params }: CloseTradePageProps) {
     load()
   }, [id])
 
-  // Real-time P/L calculations
-  let pnl = 0
-  let pnlPercent = 0
-  let rMultiple = 0
-  const entryVal = Number(trade?.entry_price || 0)
-  const exitVal = Number(exitPrice || 0)
-  const slVal = Number(trade?.sl || 0)
-
-  if (trade && !isNaN(exitVal) && exitVal > 0) {
-    pnl = trade.direction === 'BUY' ? (exitVal - entryVal) : (entryVal - exitVal)
-    pnlPercent = (pnl / entryVal) * 100
-    const risk = Math.abs(entryVal - slVal)
-    rMultiple = risk > 0 ? pnl / risk : 0
+  const handleExitChange = (legId: string, val: string) => {
+    setLegExits(prev => ({
+      ...prev,
+      [legId]: val
+    }))
   }
+
+  // Real-time calculations:
+  // Leg PnLs and Sum
+  let overallPnl = 0
+  const legPnls: Record<string, number> = {}
+  let isAllExitsFilled = true
+
+  if (trade && trade.trade_legs) {
+    trade.trade_legs.forEach(leg => {
+      const exitStr = legExits[leg.id]
+      if (!exitStr || isNaN(Number(exitStr))) {
+        isAllExitsFilled = false
+        legPnls[leg.id] = 0
+      } else {
+        const entry = Number(leg.entry_price)
+        const exit = Number(exitStr)
+        const lots = Number(leg.lot_size)
+        const pnl = leg.action === 'BUY' ? (exit - entry) * lots : (entry - exit) * lots
+        legPnls[leg.id] = pnl
+        overallPnl += pnl
+      }
+    })
+  }
+
+  // R-Multiple calculation:
+  // Using sl on parent trade as target. Net premium entry?
+  // We can calculate overall premium entry if we sum up premium cost:
+  // Buy legs add cost, Sell legs credit.
+  // Net Entry cost = sum (Buy entry * lots) - sum (Sell entry * lots)
+  // Let's keep it simple: risk = abs(net entry - sl) if sl is specified, 
+  // or just show net P/L.
+  let netEntryCost = 0
+  if (trade && trade.trade_legs) {
+    trade.trade_legs.forEach(leg => {
+      const entry = Number(leg.entry_price)
+      const lots = Number(leg.lot_size)
+      if (leg.action === 'BUY') {
+        netEntryCost += (entry * lots)
+      } else {
+        netEntryCost -= (entry * lots)
+      }
+    })
+  }
+  const slVal = Number(trade?.sl || 0)
+  const risk = Math.abs(netEntryCost - slVal)
+  const rMultiple = risk > 0 ? overallPnl / risk : 0
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError(null)
 
-    if (!exitPrice || !exitDatetime || performedAsExpected === null || followedSlTpRules === null) {
-      setError('Please fill in all details, including rule compliance questions.')
+    if (!exitDatetime || performedAsExpected === null || followedSlTpRules === null) {
+      setError('Please answer all compliance questions.')
       return
     }
 
-    const numExit = Number(exitPrice)
-    if (isNaN(numExit) || numExit <= 0) {
-      setError('Please enter a valid exit price.')
+    if (!isAllExitsFilled) {
+      setError('Please fill in exit prices for all legs.')
       return
     }
 
     startTransition(async () => {
+      const closedLegsArray = Object.keys(legExits).map(legId => ({
+        legId,
+        exitPrice: Number(legExits[legId])
+      }))
+
       const result = await closeTrade({
         tradeId: id,
-        exitPrice: numExit,
         exitDatetime: new Date(exitDatetime).toISOString(),
-        performedAsExpected: performedAsExpected,
-        followedSlTpRules: followedSlTpRules
+        performedAsExpected,
+        followedSlTpRules,
+        legs: closedLegsArray
       })
 
       if (result?.error) {
         setError(result.error)
       } else if (result?.success) {
-        // Trigger feedback modal
         setModalType(result.followedRules ? 'success' : 'warning')
         setShowFeedbackModal(true)
       }
@@ -126,7 +182,7 @@ export default function CloseTradePage({ params }: CloseTradePageProps) {
     return (
       <main className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center py-20">
         <Loader2 className="w-10 h-10 animate-spin text-emerald-400 mb-4" />
-        <p className="text-sm text-slate-500">Retrieving active trade...</p>
+        <p className="text-sm text-slate-500">Retrieving active trade details...</p>
       </main>
     )
   }
@@ -154,7 +210,7 @@ export default function CloseTradePage({ params }: CloseTradePageProps) {
         <div>
           <h1 className="text-xl font-bold">Close Position</h1>
           <p className="text-xs text-slate-500 font-semibold uppercase tracking-wider text-emerald-400">
-            {trade.symbol} • {trade.direction}
+            {trade.symbol} • {trade.strategies?.name || 'Manual'}
           </p>
         </div>
       </div>
@@ -169,12 +225,12 @@ export default function CloseTradePage({ params }: CloseTradePageProps) {
       <div className="bg-slate-900/40 border border-slate-800/80 rounded-3xl p-5 mb-6 text-sm">
         <div className="grid grid-cols-2 gap-y-3 gap-x-4">
           <div>
-            <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">Strategy</span>
-            <span className="block font-bold text-slate-300 mt-0.5">{trade.strategies?.name || 'Manual'}</span>
+            <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">Net Entry Debit/Credit</span>
+            <span className="block font-bold text-slate-300 mt-0.5">{netEntryCost.toFixed(2)}</span>
           </div>
           <div>
-            <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">Entry Price</span>
-            <span className="block font-bold text-slate-300 mt-0.5">{trade.entry_price}</span>
+            <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">Legs count</span>
+            <span className="block font-bold text-slate-300 mt-0.5">{trade.trade_legs?.length || 0}</span>
           </div>
           <div>
             <span className="block text-[10px] font-bold text-rose-500/80 uppercase tracking-wider">Stop Loss</span>
@@ -188,58 +244,94 @@ export default function CloseTradePage({ params }: CloseTradePageProps) {
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
-        {/* Exit parameters */}
+        
+        {/* LEGS CLOSE INPUTS SECTION */}
         <div className="space-y-4">
-          <div>
-            <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
-              Exit Price
-            </label>
-            <input
-              type="number"
-              step="any"
-              required
-              placeholder="0.00"
-              value={exitPrice}
-              onChange={(e) => setExitPrice(e.target.value)}
-              className="block w-full rounded-2xl border-0 bg-slate-900 px-4 py-3.5 text-slate-100 placeholder:text-slate-600 focus:ring-2 focus:ring-emerald-500 sm:text-sm outline-none"
-            />
-          </div>
+          <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+            <Layers className="w-4 h-4 text-emerald-400" />
+            Leg Exit Prices
+          </h3>
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
-              Exit Date & Time
-            </label>
-            <input
-              type="datetime-local"
-              required
-              value={exitDatetime}
-              onChange={(e) => setExitDatetime(e.target.value)}
-              className="block w-full rounded-2xl border-0 bg-slate-900 px-4 py-3.5 text-slate-100 focus:ring-2 focus:ring-emerald-500 sm:text-sm outline-none"
-            />
+          <div className="space-y-4">
+            {trade.trade_legs?.map((leg, idx) => (
+              <div key={leg.id} className="bg-slate-900/40 border border-slate-800/80 rounded-2xl p-4 space-y-3">
+                <div className="flex justify-between items-center text-xs">
+                  <span className="font-bold text-slate-400">Leg #{idx + 1}</span>
+                  <div className="flex gap-2">
+                    <span className={`px-1.5 py-0.5 rounded text-[8px] font-black uppercase ${
+                      leg.action === 'BUY' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'
+                    }`}>
+                      {leg.action === 'BUY' ? 'Long' : 'Short'}
+                    </span>
+                    <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 text-[8px] font-bold uppercase">
+                      {leg.option_type === 'NONE' ? 'SPOT' : leg.option_type}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4 text-xs">
+                  <div>
+                    <span className="text-slate-500 block">Entry:</span>
+                    <span className="text-slate-300 font-bold block">{leg.entry_price} ({leg.lot_size} Lots)</span>
+                  </div>
+                  {legExits[leg.id] && !isNaN(Number(legExits[leg.id])) && (
+                    <div className="text-right">
+                      <span className="text-slate-500 block">PnL:</span>
+                      <span className={`font-bold block ${legPnls[leg.id] >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        {legPnls[leg.id] >= 0 ? '+' : ''}{legPnls[leg.id].toFixed(2)}
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                    Exit Price
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    required
+                    placeholder="Enter Exit Price"
+                    value={legExits[leg.id]}
+                    onChange={(e) => handleExitChange(leg.id, e.target.value)}
+                    className="block w-full rounded-xl border-0 bg-slate-900 px-3 py-2.5 text-xs text-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none"
+                  />
+                </div>
+              </div>
+            ))}
           </div>
         </div>
 
+        {/* Global Exit Date Time */}
+        <div>
+          <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
+            Exit Date & Time (Overall Trade Close)
+          </label>
+          <input
+            type="datetime-local"
+            required
+            value={exitDatetime}
+            onChange={(e) => setExitDatetime(e.target.value)}
+            className="block w-full rounded-2xl border-0 bg-slate-900 px-4 py-3.5 text-slate-100 focus:ring-2 focus:ring-emerald-500 sm:text-sm outline-none"
+          />
+        </div>
+
         {/* Real-time Math Output Card */}
-        {exitPrice && !isNaN(exitVal) && exitVal > 0 && (
+        {isAllExitsFilled && (
           <div className="bg-slate-900/20 border border-slate-900 rounded-3xl p-5 relative overflow-hidden">
-            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Computed Performance</h3>
-            <div className="grid grid-cols-3 gap-2 text-center">
+            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Aggregated Trade Performance</h3>
+            <div className="grid grid-cols-2 gap-2 text-center">
               <div>
-                <span className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider">PnL</span>
-                <span className={`block text-lg font-black mt-1 ${pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                  {pnl >= 0 ? '+' : ''}{pnl.toFixed(2)}
-                </span>
-              </div>
-              <div>
-                <span className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider">% Change</span>
-                <span className={`block text-lg font-black mt-1 ${pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                  {pnl >= 0 ? '+' : ''}{pnlPercent.toFixed(2)}%
+                <span className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider">Total PnL</span>
+                <span className={`block text-xl font-black mt-1 ${overallPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  {overallPnl >= 0 ? '+' : ''}{overallPnl.toFixed(2)}
                 </span>
               </div>
               <div>
                 <span className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider">R-Multiple</span>
-                <span className={`block text-lg font-black mt-1 ${pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                  {pnl >= 0 ? '+' : ''}{rMultiple.toFixed(2)}R
+                <span className={`block text-xl font-black mt-1 ${overallPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  {overallPnl >= 0 ? '+' : ''}{rMultiple.toFixed(2)}R
                 </span>
               </div>
             </div>
@@ -320,7 +412,7 @@ export default function CloseTradePage({ params }: CloseTradePageProps) {
         <div>
           <button
             type="submit"
-            disabled={isPending || performedAsExpected === null || followedSlTpRules === null}
+            disabled={isPending || performedAsExpected === null || followedSlTpRules === null || !isAllExitsFilled}
             className="flex w-full justify-center rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 px-4 py-4 text-sm font-bold text-slate-950 shadow-lg shadow-emerald-500/15 hover:from-emerald-400 hover:to-teal-400 active:scale-[0.98] transition-all disabled:opacity-50 select-none font-bold"
           >
             {isPending ? (
@@ -329,7 +421,7 @@ export default function CloseTradePage({ params }: CloseTradePageProps) {
                 Logging Close...
               </span>
             ) : (
-              'Submit & Log Trade'
+              'Submit & Log Close'
             )}
           </button>
         </div>
