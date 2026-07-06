@@ -57,14 +57,14 @@ export async function middleware(request: NextRequest) {
   }
 
   // Fetch profile to check role
-  const { data: profile } = await supabase
+  const { data: profile, error: profileError } = await supabase
     .from('profiles')
     .select('role')
     .eq('id', user.id)
     .single()
 
   // Fetch subscription to check status
-  const { data: subscription } = await supabase
+  const { data: subscription, error: subError } = await supabase
     .from('subscriptions')
     .select('plan, status, trial_ends_at, current_period_end')
     .eq('user_id', user.id)
@@ -75,8 +75,11 @@ export async function middleware(request: NextRequest) {
   console.log('MIDDLEWARE GATE CHECK:', {
     path,
     email: user.email,
-    role: profile?.role,
+    userId: user.id,
+    profile,
+    profileError,
     subscription,
+    subError,
     isSubscribePath,
     now: new Date().toISOString()
   })
