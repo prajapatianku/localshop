@@ -3,7 +3,8 @@
 import React, { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { login } from '@/app/auth/actions'
+import { signIn } from '@/app/actions/auth'
+import { Mail, Lock, ShoppingBag, ArrowRight } from 'lucide-react'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -16,7 +17,7 @@ export default function LoginPage() {
     setLoading(true)
 
     const formData = new FormData(e.currentTarget)
-    const result = await login(null, formData)
+    const result = await signIn(formData)
 
     if (result?.error) {
       setError(result.error)
@@ -28,41 +29,42 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-center px-6 py-12 relative overflow-hidden">
-      {/* Background gradients for aesthetics */}
-      <div className="absolute top-[-20%] left-[-10%] w-[80%] h-[60%] rounded-full bg-emerald-500/10 blur-[120px] pointer-events-none" />
-      <div className="absolute bottom-[-20%] right-[-10%] w-[80%] h-[60%] rounded-full bg-indigo-500/10 blur-[120px] pointer-events-none" />
+    <main className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-center px-4 py-8 relative overflow-hidden">
+      {/* Decorative Gradients */}
+      <div className="absolute top-[-10%] right-[-10%] w-[300px] h-[300px] rounded-full bg-sky-500/10 blur-[100px] pointer-events-none" />
+      <div className="absolute bottom-[-10%] left-[-10%] w-[300px] h-[300px] rounded-full bg-indigo-500/10 blur-[100px] pointer-events-none" />
 
-      <div className="sm:mx-auto sm:w-full sm:max-w-md z-10">
-        <div className="flex flex-col items-center">
-          <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-emerald-400 to-teal-500 flex items-center justify-center shadow-lg shadow-emerald-500/20 mb-6">
-            <span className="text-slate-950 font-black text-2xl tracking-tighter">GT</span>
+      <div className="w-full max-w-md mx-auto z-10">
+        <div className="text-center mb-6">
+          <div className="inline-flex w-12 h-12 rounded-2xl bg-gradient-to-tr from-sky-400 to-indigo-500 items-center justify-center shadow-lg shadow-sky-500/20 mb-3">
+            <ShoppingBag className="w-6 h-6 text-slate-950 stroke-[2.5]" />
           </div>
-          <h1 className="text-3xl font-extrabold tracking-tight bg-gradient-to-r from-slate-100 via-emerald-100 to-teal-300 bg-clip-text text-transparent text-center">
-            Gully Trader
+          <h1 className="text-2xl font-black tracking-tight bg-gradient-to-r from-slate-100 via-sky-100 to-indigo-300 bg-clip-text text-transparent">
+            Local Shop
           </h1>
-          <p className="mt-2 text-sm text-slate-400 text-center">
-            Trade with discipline. Journal with precision.
+          <p className="mt-1 text-xs text-slate-400">
+            Welcome back! Discover nearby stores.
           </p>
         </div>
-      </div>
 
-      <div className="mt-10 sm:mx-auto sm:w-full sm:max-w-md z-10">
-        <div className="bg-slate-900/60 backdrop-blur-md border border-slate-800/80 px-6 py-8 rounded-3xl shadow-xl sm:px-10">
-          <h2 className="text-xl font-semibold text-slate-200 mb-6">Welcome Back</h2>
-          
-          <form className="space-y-6" onSubmit={handleSubmit}>
+        <div className="bg-slate-900/40 backdrop-blur-xl border border-slate-900 px-5 py-6 rounded-3xl shadow-xl">
+          <h2 className="text-lg font-bold text-slate-100 mb-4">Sign In</h2>
+
+          <form className="space-y-4" onSubmit={handleSubmit}>
             {error && (
-              <div className="rounded-xl bg-rose-500/10 border border-rose-500/20 p-4 text-sm text-rose-400">
+              <div className="rounded-xl bg-rose-500/10 border border-rose-500/20 p-3.5 text-xs text-rose-400">
                 {error}
               </div>
             )}
 
             <div>
-              <label htmlFor="email" className="block text-sm font-medium text-slate-300">
+              <label htmlFor="email" className="block text-xs font-medium text-slate-400 mb-1.5">
                 Email Address
               </label>
-              <div className="mt-2">
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
+                  <Mail className="w-4 h-4" />
+                </div>
                 <input
                   id="email"
                   name="email"
@@ -70,18 +72,21 @@ export default function LoginPage() {
                   autoComplete="email"
                   required
                   placeholder="name@example.com"
-                  className="block w-full rounded-2xl border-0 bg-slate-950/80 px-4 py-3.5 text-slate-100 shadow-sm ring-1 ring-inset ring-slate-800 placeholder:text-slate-500 focus:ring-2 focus:ring-inset focus:ring-emerald-500 sm:text-sm outline-none transition-all duration-200"
+                  className="block w-full rounded-2xl border-0 bg-slate-950/60 pl-10 pr-4 py-3 text-slate-200 ring-1 ring-inset ring-slate-900 placeholder:text-slate-600 focus:ring-2 focus:ring-sky-500 sm:text-xs outline-none transition-all duration-200"
                 />
               </div>
             </div>
 
             <div>
-              <div className="flex items-center justify-between">
-                <label htmlFor="password" className="block text-sm font-medium text-slate-300">
+              <div className="flex items-center justify-between mb-1.5">
+                <label htmlFor="password" className="block text-xs font-medium text-slate-400">
                   Password
                 </label>
               </div>
-              <div className="mt-2">
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
+                  <Lock className="w-4 h-4" />
+                </div>
                 <input
                   id="password"
                   name="password"
@@ -89,25 +94,26 @@ export default function LoginPage() {
                   autoComplete="current-password"
                   required
                   placeholder="••••••••"
-                  className="block w-full rounded-2xl border-0 bg-slate-950/80 px-4 py-3.5 text-slate-100 shadow-sm ring-1 ring-inset ring-slate-800 placeholder:text-slate-500 focus:ring-2 focus:ring-inset focus:ring-emerald-500 sm:text-sm outline-none transition-all duration-200"
+                  className="block w-full rounded-2xl border-0 bg-slate-950/60 pl-10 pr-4 py-3 text-slate-200 ring-1 ring-inset ring-slate-900 placeholder:text-slate-600 focus:ring-2 focus:ring-sky-500 sm:text-xs outline-none transition-all duration-200"
                 />
               </div>
             </div>
 
-            <div>
+            <div className="pt-2">
               <button
                 type="submit"
                 disabled={loading}
-                className="flex w-full justify-center rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 px-4 py-4 text-sm font-bold text-slate-950 shadow-lg shadow-emerald-500/15 hover:from-emerald-400 hover:to-teal-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-500 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed select-none active:scale-[0.98]"
+                className="flex w-full justify-center items-center gap-2 rounded-2xl bg-gradient-to-r from-sky-500 to-indigo-500 py-3.5 text-xs font-bold text-slate-950 shadow-lg shadow-sky-500/10 hover:from-sky-400 hover:to-indigo-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed select-none active:scale-[0.98]"
               >
                 {loading ? 'Signing in...' : 'Sign In'}
+                {!loading && <ArrowRight className="w-4 h-4 stroke-[2.5]" />}
               </button>
             </div>
           </form>
 
-          <p className="mt-8 text-center text-sm text-slate-400">
-            New to Gully Trader?{' '}
-            <Link href="/signup" className="font-semibold text-emerald-400 hover:text-emerald-300 transition-colors">
+          <p className="mt-6 text-center text-xs text-slate-400">
+            New to Local Shop?{' '}
+            <Link href="/signup" className="font-semibold text-sky-400 hover:text-sky-300 transition-colors">
               Create an account
             </Link>
           </p>

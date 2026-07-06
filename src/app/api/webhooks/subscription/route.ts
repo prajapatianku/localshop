@@ -18,29 +18,27 @@ export async function POST(request: Request) {
 
     const { event, data } = body
 
-    // Initialize Supabase Admin Client (bypasses RLS to update user subscription metadata)
+    // Initialize Supabase Admin Client (bypasses RLS to update shop subscription details)
     const supabaseAdmin = createAdminClient()
 
     if (event === 'customer.subscription.updated' || event === 'invoice.payment_succeeded') {
-      const userId = data.user_id
+      const shopId = data.shop_id
+      const status = data.status || 'active' // 'active' | 'expired'
       const plan = data.plan // 'monthly' | 'yearly'
-      const status = data.status // 'active' | 'expired' | 'trialing'
-      const providerId = data.payment_provider_id || 'sub_mock_' + Math.random().toString(36).substr(2, 9)
 
       // Calculate new period ending date
       const daysToAdd = plan === 'yearly' ? 365 : 30
-      const currentPeriodEnd = new Date()
-      currentPeriodEnd.setDate(currentPeriodEnd.getDate() + daysToAdd)
+      const endsAt = new Date()
+      endsAt.setDate(endsAt.getDate() + daysToAdd)
 
+      // Update subscription status in database
       const { error } = await supabaseAdmin
         .from('subscriptions')
         .update({
-          plan,
           status,
-          current_period_end: currentPeriodEnd.toISOString(),
-          payment_provider_id: providerId,
+          ends_at: endsAt.toISOString(),
         })
-        .eq('user_id', userId)
+        .eq('shop_id', shopId)
 
       if (error) {
         console.error('Database update error in webhook:', error)
@@ -51,15 +49,15 @@ export async function POST(request: Request) {
     }
 
     if (event === 'customer.subscription.deleted') {
-      const userId = data.user_id
+      const shopId = data.shop_id
 
       const { error } = await supabaseAdmin
         .from('subscriptions')
         .update({
           status: 'expired',
-          current_period_end: new Date().toISOString()
+          ends_at: new Date().toISOString()
         })
-        .eq('user_id', userId)
+        .eq('shop_id', shopId)
 
       if (error) {
         return NextResponse.json({ error: error.message }, { status: 500 })
@@ -68,7 +66,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: true, message: 'Subscription marked as expired.' })
     }
 
-    return NextResponse.json({ received: true, info: 'Unhandle event type' })
+    return NextResponse.json({ received: true, info: 'Unhandled event type' })
   } catch (err: any) {
     console.error('Webhook parsing error:', err)
     return NextResponse.json({ error: err.message }, { status: 400 })

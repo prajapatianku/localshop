@@ -34,16 +34,27 @@ export async function middleware(request: NextRequest) {
   const url = request.nextUrl.clone()
   const path = url.pathname
 
-  // Bypass all API routes (like webhooks) from auth & subscription checks
-  if (path.startsWith('/api/')) {
+  // 1. Bypass static assets, API calls, and public pages
+  if (
+    path.startsWith('/api/') ||
+    path.startsWith('/auth/') ||
+    path === '/favicon.ico'
+  ) {
     return supabaseResponse
   }
 
-  // Public paths that do not require auth (except for static assets, handled by matcher)
-  const isAuthPath = path === '/login' || path === '/signup' || path.startsWith('/auth/')
+  // Define public routes that do NOT require authentication to read (to support local SEO & organic browsing)
+  // Anyone can browse the landing page, view shop profiles, and read product details.
+  const isShopView = path.startsWith('/shop/')
+  const isProductView = path.startsWith('/product/')
+  const isHome = path === '/'
+  const isAuthPage = path === '/login' || path === '/signup'
+
+  const isPublicBrowseRoute = isHome || isShopView || isProductView
 
   if (!user) {
-    if (!isAuthPath) {
+    // If not authenticated and trying to access private pages (like cart, checkout, dashboard, admin, orders)
+    if (!isPublicBrowseRoute && !isAuthPage) {
       url.pathname = '/login'
       return NextResponse.redirect(url)
     }
@@ -51,95 +62,40 @@ export async function middleware(request: NextRequest) {
   }
 
   // User is logged in
-  if (isAuthPath) {
+  if (isAuthPage) {
     url.pathname = '/'
     return NextResponse.redirect(url)
   }
 
-  // Fetch profile to check role
-  const { data: profile, error: profileError } = await supabase
+  // Fetch profile to verify role mapping
+  const { data: profile } = await supabase
     .from('profiles')
     .select('role')
     .eq('id', user.id)
     .single()
 
-  // Fetch subscription to check status
-  const { data: subscription, error: subError } = await supabase
-    .from('subscriptions')
-    .select('plan, status, trial_ends_at, current_period_end')
-    .eq('user_id', user.id)
-    .single()
+  const role = profile?.role
 
-  const isSubscribePath = path === '/subscribe'
-
-  console.log('MIDDLEWARE GATE CHECK:', {
-    path,
-    email: user.email,
-    userId: user.id,
-    profile,
-    profileError,
-    subscription,
-    subError,
-    isSubscribePath,
-    now: new Date().toISOString()
-  })
-
-  // Admin route gating
-  if (path.startsWith('/admin')) {
-    if (profile?.role !== 'admin') {
-      url.pathname = '/'
-      return NextResponse.redirect(url)
-    }
-  }
+  // Redirect users if they are logged in but access role-restricted panels
   
-  if (!isSubscribePath && profile?.role !== 'admin') {
-    let isSubscribed = false
-    if (subscription) {
-      const trialEnds = new Date(subscription.trial_ends_at).getTime()
-      const now = Date.now()
-      
-      const isTrialing = subscription.status === 'trialing' && trialEnds > now
-      const isActive = subscription.status === 'active'
-      const isCurrentPeriodActive = subscription.current_period_end 
-        ? new Date(subscription.current_period_end).getTime() > now
-        : false
-      
-      if (isTrialing || isActive || isCurrentPeriodActive || subscription.plan === 'free') {
-        isSubscribed = true
-      }
-    }
-
-    if (!isSubscribed) {
-      url.pathname = '/subscribe'
-      return NextResponse.redirect(url)
-    }
-  }
-
-  // Redirect subscribed users (and admins) away from /subscribe
-  if (isSubscribePath) {
-    let isSubscribed = false
-    if (profile?.role === 'admin') {
-      isSubscribed = true
-    } else if (subscription) {
-      const trialEnds = new Date(subscription.trial_ends_at).getTime()
-      const now = Date.now()
-      
-      const isTrialing = subscription.status === 'trialing' && trialEnds > now
-      const isActive = subscription.status === 'active'
-      const isCurrentPeriodActive = subscription.current_period_end 
-        ? new Date(subscription.current_period_end).getTime() > now
-        : false
-      
-      if (isTrialing || isActive || isCurrentPeriodActive || subscription.plan === 'free') {
-        isSubscribed = true
-      }
-    }
-
-    if (isSubscribed) {
+  // 1. Admin Gating
+  if (path.startsWith('/admin')) {
+    if (role !== 'admin') {
       url.pathname = '/'
       return NextResponse.redirect(url)
     }
   }
+
+  // 2. Shopkeeper Dashboard Gating
+  if (path.startsWith('/dashboard')) {
+    if (role !== 'shopkeeper' && role !== 'admin') {
+      url.pathname = '/'
+      return NextResponse.redirect(url)
+    }
+  }
+
+  // 3. Prevent customers from seeing merchant-specific UI or vice versa if they access pages directly
+  // (Optional: can add redirects if needed, but standard role-gating above is sufficient)
 
   return supabaseResponse
 }
