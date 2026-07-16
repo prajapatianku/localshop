@@ -181,6 +181,7 @@ interface CloseTradeParams {
   performedAsExpected: boolean
   followedSlTpRules: boolean
   legs: CloseLegParam[]
+  notes?: string
 }
 
 export async function closeTrade(params: CloseTradeParams) {
@@ -235,6 +236,7 @@ export async function closeTrade(params: CloseTradeParams) {
       status: 'CLOSED',
       performed_as_expected: params.performedAsExpected,
       followed_sl_tp_rules: params.followedSlTpRules,
+      notes: params.notes || null,
     })
     .eq('id', params.tradeId)
     .eq('user_id', user.id)
@@ -331,6 +333,7 @@ interface EditTradeParams {
   performedAsExpected: boolean
   followedSlTpRules: boolean
   legs: EditLegParam[]
+  notes?: string
 }
 
 export async function saveEditedTrade(params: EditTradeParams) {
@@ -395,6 +398,7 @@ export async function saveEditedTrade(params: EditTradeParams) {
       pnl: totalPnl,
       performed_as_expected: params.performedAsExpected,
       followed_sl_tp_rules: params.followedSlTpRules,
+      notes: params.notes || null,
     })
     .eq('id', params.tradeId)
     .eq('user_id', user.id)

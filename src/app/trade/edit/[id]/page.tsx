@@ -30,6 +30,7 @@ interface Trade {
   followed_sl_tp_rules: boolean
   strategies?: { name: string }
   trade_legs?: TradeLeg[]
+  notes?: string
 }
 
 interface LegEditState {
@@ -60,6 +61,7 @@ export default function EditTradePage({ params }: EditTradePageProps) {
   
   // Legs list state
   const [legs, setLegs] = useState<LegEditState[]>([])
+  const [notes, setNotes] = useState('')
 
   const [isPending, startTransition] = useTransition()
 
@@ -83,6 +85,7 @@ export default function EditTradePage({ params }: EditTradePageProps) {
           
           setPerformedAsExpected(t.performed_as_expected)
           setFollowedSlTpRules(t.followed_sl_tp_rules)
+          setNotes(t.notes || '')
 
           // Map legs
           const mappedLegs = (t.trade_legs || []).map(l => ({
@@ -186,7 +189,8 @@ export default function EditTradePage({ params }: EditTradePageProps) {
         exitDatetime: new Date(exitDatetime).toISOString(),
         performedAsExpected,
         followedSlTpRules,
-        legs: legsArray
+        legs: legsArray,
+        notes: notes.trim() || undefined
       })
 
       if (result?.error) {
@@ -526,6 +530,20 @@ export default function EditTradePage({ params }: EditTradePageProps) {
               </button>
             </div>
           </div>
+        </div>
+
+        {/* Notes Section */}
+        <div className="bg-slate-900/40 border border-slate-800/80 rounded-3xl p-5">
+          <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">
+            Trade Reflection & Notes
+          </label>
+          <textarea
+            placeholder="Describe what went well, how you felt, or reasons behind exit execution deviations..."
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            rows={4}
+            className="block w-full rounded-2xl border-0 bg-slate-950 px-4 py-3 text-xs text-slate-250 placeholder:text-slate-650 focus:ring-2 focus:ring-emerald-500 outline-none resize-none"
+          />
         </div>
 
         {/* Submit */}

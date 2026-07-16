@@ -42,6 +42,7 @@ export default function CloseTradePage({ params }: CloseTradePageProps) {
   
   // Exits states mapped by legId
   const [legExits, setLegExits] = useState<Record<string, string>>({})
+  const [notes, setNotes] = useState('')
 
   // Feedback states
   const [showFeedbackModal, setShowFeedbackModal] = useState(false)
@@ -160,7 +161,8 @@ export default function CloseTradePage({ params }: CloseTradePageProps) {
         exitDatetime: new Date(exitDatetime).toISOString(),
         performedAsExpected,
         followedSlTpRules,
-        legs: closedLegsArray
+        legs: closedLegsArray,
+        notes: notes.trim() || undefined
       })
 
       if (result?.error) {
@@ -406,6 +408,20 @@ export default function CloseTradePage({ params }: CloseTradePageProps) {
               </button>
             </div>
           </div>
+        </div>
+
+        {/* Notes Section */}
+        <div className="bg-slate-900/40 border border-slate-800/80 rounded-3xl p-5">
+          <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">
+            Trade Reflection & Notes
+          </label>
+          <textarea
+            placeholder="Describe what went well, how you felt, or reasons behind exit execution deviations..."
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            rows={4}
+            className="block w-full rounded-2xl border-0 bg-slate-950 px-4 py-3 text-xs text-slate-250 placeholder:text-slate-600 focus:ring-2 focus:ring-emerald-500 outline-none resize-none"
+          />
         </div>
 
         {/* Submit */}

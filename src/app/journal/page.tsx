@@ -27,6 +27,7 @@ interface Trade {
   followed_sl_tp_rules: boolean
   strategies?: { name: string }
   trade_legs?: TradeLeg[]
+  notes?: string
 }
 
 interface Strategy {
@@ -454,6 +455,16 @@ export default function JournalPage() {
                     <span className={`font-semibold ${trade.performed_as_expected ? 'text-emerald-500/80' : 'text-rose-500/80'}`}>
                       {trade.performed_as_expected ? 'As Expected' : 'Deviation'}
                     </span>
+                  </div>
+                )}
+
+                {/* Notes reflection display */}
+                {trade.notes && (
+                  <div className="mt-3 pt-3 border-t border-slate-800/30 text-xs">
+                    <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block mb-1">Notes & Reflection:</span>
+                    <p className="text-slate-400 bg-slate-950/40 rounded-xl p-3 border border-slate-900/60 leading-relaxed italic">
+                      "{trade.notes}"
+                    </p>
                   </div>
                 )}
               </div>
