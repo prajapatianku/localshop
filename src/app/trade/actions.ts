@@ -413,3 +413,53 @@ export async function saveEditedTrade(params: EditTradeParams) {
 
   return { success: true }
 }
+
+export async function importTrades(tradesToImport: any[]) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'Not authenticated.' }
+
+  let successCount = 0
+
+  for (const t of tradesToImport) {
+    // 1. Insert parent trade
+    const { data: trade, error: tradeErr } = await supabase
+      .from('trades')
+      .insert({
+        user_id: user.id,
+        symbol: t.symbol,
+        status: t.status,
+        pnl: t.pnl,
+        sl: t.sl,
+        tp: t.tp,
+        entry_datetime: t.entry_datetime,
+        exit_datetime: t.exit_datetime || null,
+        followed_sl_tp_rules: null, // user reviews this on dashboard/journal later
+        performed_as_expected: true,
+        notes: t.notes || 'Imported via CSV Tradebook'
+      })
+      .select()
+      .single()
+
+    if (tradeErr || !trade) continue
+
+    // 2. Insert legs
+    for (const leg of t.legs) {
+      await supabase.from('trade_legs').insert({
+        trade_id: trade.id,
+        action: leg.action,
+        option_type: leg.option_type,
+        entry_price: leg.entry_price,
+        exit_price: leg.exit_price || null,
+        lot_size: leg.lot_size,
+        pnl: leg.pnl || null
+      })
+    }
+    successCount++
+  }
+
+  revalidatePath('/')
+  revalidatePath('/journal')
+  revalidatePath('/analyze')
+  return { success: true, count: successCount }
+}

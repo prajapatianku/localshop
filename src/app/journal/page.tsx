@@ -2,8 +2,8 @@
 
 import React, { useEffect, useState, useTransition } from 'react'
 import Link from 'next/link'
-import { Calendar, Filter, Loader2, RefreshCw, Smile, AlertCircle, ArrowLeft, ArrowUpRight, TrendingUp, TrendingDown, BookOpen, Edit, Trash2, ShieldAlert } from 'lucide-react'
-import { getClosedTrades, softDeleteTrade } from '../trade/actions'
+import { Calendar, Filter, Loader2, RefreshCw, Smile, AlertCircle, ArrowLeft, ArrowUpRight, TrendingUp, TrendingDown, BookOpen, Edit, Trash2, ShieldAlert, Upload } from 'lucide-react'
+import { getClosedTrades, softDeleteTrade, importTrades } from '../trade/actions'
 import { getStrategies } from '../strategies/actions'
 
 interface TradeLeg {
@@ -53,6 +53,195 @@ export default function JournalPage() {
   const [deletingTradeId, setDeletingTradeId] = useState<string | null>(null)
   
   const [isPending, startTransition] = useTransition()
+
+  // CSV Import States
+  const [showImportModal, setShowImportModal] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [parsedTrades, setParsedTrades] = useState<any[]>([])
+  const [importError, setImportError] = useState<string | null>(null)
+
+  // CSV Parser & Auto-Detector
+  const handleCSVUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    setImportError(null)
+    const reader = new FileReader()
+    reader.onload = async (event) => {
+      const text = event.target?.result as string
+      try {
+        const lines = text.split(/\r?\n/)
+        if (lines.length < 2) {
+          throw new Error('CSV file is empty or invalid.')
+        }
+
+        // Parse CSV lines into array of objects
+        const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, '').toLowerCase())
+        
+        // Find column indices by checking matches
+        const symbolIdx = headers.findIndex(h => h.includes('symbol') || h.includes('scrip') || h.includes('ticker') || h.includes('instrument'))
+        const typeIdx = headers.findIndex(h => h.includes('type') || h.includes('buy/sell') || h.includes('action') || h.includes('transaction'))
+        const qtyIdx = headers.findIndex(h => h.includes('quantity') || h.includes('qty') || h.includes('shares') || h.includes('lot'))
+        const priceIdx = headers.findIndex(h => h.includes('price') || h.includes('avg') || h.includes('rate'))
+        const dateIdx = headers.findIndex(h => h.includes('date') || h.includes('time'))
+
+        if (symbolIdx === -1 || typeIdx === -1 || qtyIdx === -1 || priceIdx === -1) {
+          throw new Error('Could not identify required columns (Symbol, Buy/Sell, Quantity, Price) in CSV headers.')
+        }
+
+        const executions: any[] = []
+
+        for (let i = 1; i < lines.length; i++) {
+          const line = lines[i].trim()
+          if (!line) continue
+
+          const values: string[] = []
+          let insideQuote = false;
+          let currentValue = '';
+          
+          for (let c = 0; c < line.length; c++) {
+            const char = line[c];
+            if (char === '"') {
+              insideQuote = !insideQuote;
+            } else if (char === ',' && !insideQuote) {
+              values.push(currentValue.trim());
+              currentValue = '';
+            } else {
+              currentValue += char;
+            }
+          }
+          values.push(currentValue.trim());
+
+          const symbol = values[symbolIdx]?.replace(/"/g, '').toUpperCase()
+          const actionText = values[typeIdx]?.replace(/"/g, '').toUpperCase()
+          const action = (actionText.includes('BUY') || actionText.startsWith('B')) ? 'BUY' : 'SELL'
+          const quantity = Math.abs(parseInt(values[qtyIdx]?.replace(/"/g, '')) || 0)
+          const price = parseFloat(values[priceIdx]?.replace(/"/g, '')) || 0
+          
+          let datetime = new Date().toISOString()
+          if (dateIdx !== -1 && values[dateIdx]) {
+            const dateStr = values[dateIdx].replace(/"/g, '')
+            const parsedD = new Date(dateStr)
+            if (!isNaN(parsedD.getTime())) {
+              datetime = parsedD.toISOString()
+            }
+          }
+
+          if (symbol && quantity > 0 && price > 0) {
+            executions.push({ symbol, action, quantity, price, datetime })
+          }
+        }
+
+        if (executions.length === 0) {
+          throw new Error('No valid execution rows found in the CSV file.')
+        }
+
+        // Pair executions into complete closed/open trades
+        const tradesGrouped = pairExecutions(executions)
+        setParsedTrades(tradesGrouped)
+      } catch (err: any) {
+        setImportError(err.message || 'Failed to parse CSV file.')
+      }
+    }
+    reader.readAsText(file)
+  }
+
+  const pairExecutions = (executions: any[]) => {
+    const sorted = [...executions].sort((a, b) => new Date(a.datetime).getTime() - new Date(b.datetime).getTime())
+    
+    const tradesToCreate: any[] = []
+    const openPositions: Record<string, any[]> = {}
+    
+    for (const exec of sorted) {
+      const symbol = exec.symbol.toUpperCase()
+      if (!openPositions[symbol]) {
+        openPositions[symbol] = []
+      }
+      
+      const oppositeAction = exec.action === 'BUY' ? 'SELL' : 'BUY'
+      const matchIndex = openPositions[symbol].findIndex(o => o.action === oppositeAction)
+      
+      if (matchIndex !== -1) {
+        const matchingExec = openPositions[symbol][matchIndex]
+        openPositions[symbol].splice(matchIndex, 1)
+        
+        const entryExec = exec.action === 'SELL' ? matchingExec : exec
+        const exitExec = exec.action === 'SELL' ? exec : matchingExec
+        
+        const pnl = exec.action === 'SELL'
+          ? (exitExec.price - entryExec.price) * entryExec.quantity
+          : (entryExec.price - exitExec.price) * entryExec.quantity
+          
+        tradesToCreate.push({
+          symbol,
+          status: 'CLOSED',
+          pnl,
+          entry_datetime: entryExec.datetime,
+          exit_datetime: exitExec.datetime,
+          sl: entryExec.price * 0.9,
+          tp: entryExec.price * 1.1,
+          notes: `Imported via CSV. Executions: ${entryExec.action} ${entryExec.quantity} @ ${entryExec.price} -> ${exitExec.action} ${exitExec.quantity} @ ${exitExec.price}`,
+          legs: [
+            {
+              action: 'BUY',
+              option_type: (symbol.includes('CE') || symbol.includes('CALL')) ? 'CALL' : (symbol.includes('PE') || symbol.includes('PUT')) ? 'PUT' : 'NONE',
+              entry_price: entryExec.price,
+              exit_price: exitExec.price,
+              lot_size: entryExec.quantity,
+              pnl
+            }
+          ]
+        })
+      } else {
+        openPositions[symbol].push(exec)
+      }
+    }
+    
+    // Remaining unmatched
+    for (const symbol in openPositions) {
+      for (const exec of openPositions[symbol]) {
+        tradesToCreate.push({
+          symbol,
+          status: 'OPEN',
+          pnl: 0,
+          entry_datetime: exec.datetime,
+          sl: exec.price * 0.9,
+          tp: exec.price * 1.1,
+          notes: `Imported open position: ${exec.action} ${exec.quantity} @ ${exec.price}`,
+          legs: [
+            {
+              action: exec.action,
+              option_type: (symbol.includes('CE') || symbol.includes('CALL')) ? 'CALL' : (symbol.includes('PE') || symbol.includes('PUT')) ? 'PUT' : 'NONE',
+              entry_price: exec.price,
+              lot_size: exec.quantity
+            }
+          ]
+        })
+      }
+    }
+    
+    return tradesToCreate
+  }
+
+  const handleSaveImport = async () => {
+    if (parsedTrades.length === 0) return
+    
+    setImporting(true)
+    try {
+      const res = await importTrades(parsedTrades)
+      if (res?.error) {
+        setImportError(res.error)
+      } else {
+        setShowImportModal(false)
+        setParsedTrades([])
+        await loadData(true)
+      }
+    } catch (err: any) {
+      setImportError('Failed to import trades. Please try again.')
+    } finally {
+      setImporting(false)
+    }
+  }
 
   const loadData = async (isRef = false) => {
     try {
@@ -161,13 +350,23 @@ export default function JournalPage() {
           </Link>
           <h1 className="text-2xl font-bold tracking-tight">Journal Log</h1>
         </div>
-        <button
-          onClick={() => loadData(true)}
-          disabled={refreshing || loading}
-          className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200 active:scale-90 transition-all disabled:opacity-50"
-        >
-          <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowImportModal(true)}
+            className="flex items-center gap-2 py-2 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs transition-all active:scale-95 shadow-lg shadow-emerald-500/10 cursor-pointer"
+          >
+            <Upload className="w-3.5 h-3.5" />
+            <span>Import CSV</span>
+          </button>
+          
+          <button
+            onClick={() => loadData(true)}
+            disabled={refreshing || loading}
+            className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200 active:scale-90 transition-all disabled:opacity-50"
+          >
+            <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -470,6 +669,102 @@ export default function JournalPage() {
               </div>
             )
           })}
+        </div>
+      )}
+      {/* CSV Import Modal Overlay */}
+      {showImportModal && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-2xl p-6 shadow-2xl relative">
+            <button
+              onClick={() => {
+                setShowImportModal(false)
+                setParsedTrades([])
+                setImportError(null)
+              }}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-200 p-1.5 rounded-lg bg-slate-950 border border-slate-850 hover:bg-slate-900"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+            </button>
+
+            <h3 className="text-lg font-bold text-slate-100 mb-1">Import Tradebook CSV</h3>
+            <p className="text-xs text-slate-500 mb-6 font-semibold">Auto-detects and groups Zerodha, AngelOne, or Groww reports into journal entries.</p>
+
+            <div className="space-y-4">
+              {/* File Input */}
+              <div className="border-2 border-dashed border-slate-800 rounded-2xl p-8 text-center bg-slate-950/45 hover:border-emerald-500/50 transition-colors">
+                <input
+                  type="file"
+                  accept=".csv"
+                  onChange={handleCSVUpload}
+                  className="hidden"
+                  id="csv-file-input"
+                />
+                <label htmlFor="csv-file-input" className="cursor-pointer block space-y-3">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 mx-auto">
+                    <Upload className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <span className="text-xs font-bold text-emerald-400">Click to upload Tradebook CSV</span>
+                    <p className="text-[10px] text-slate-500 mt-1 font-semibold">Files should contain: Symbol, Buy/Sell, Quantity, Price, Date</p>
+                  </div>
+                </label>
+              </div>
+
+              {importError && (
+                <div className="rounded-xl bg-rose-500/10 border border-rose-500/20 p-3 text-xs text-rose-450">
+                  {importError}
+                </div>
+              )}
+
+              {/* Parsed Trades Preview */}
+              {parsedTrades.length > 0 && (
+                <div className="space-y-3">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Parsed Trades Preview ({parsedTrades.length})</span>
+                  
+                  <div className="max-h-60 overflow-y-auto space-y-2 border border-slate-800/60 rounded-2xl p-2 bg-slate-950/20">
+                    {parsedTrades.map((t, idx) => {
+                      const isWin = t.pnl > 0
+                      const isClosed = t.status === 'CLOSED'
+                      return (
+                        <div key={idx} className="flex justify-between items-center text-xs bg-slate-900 border border-slate-800/80 rounded-xl p-3">
+                          <div>
+                            <span className="text-[9px] text-slate-500 font-semibold uppercase">{new Date(t.entry_datetime).toLocaleDateString()}</span>
+                            <h4 className="font-extrabold text-slate-200 mt-0.5">{t.symbol}</h4>
+                          </div>
+
+                          <div className="flex items-center gap-4">
+                            <span className="px-1.5 py-0.5 rounded text-[8px] bg-slate-800 text-slate-400 font-extrabold uppercase">
+                              {isClosed ? 'CLOSED' : 'OPEN'}
+                            </span>
+                            {isClosed && (
+                              <span className={`font-bold ${isWin ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                {isWin ? '+' : ''}{t.pnl.toFixed(2)}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+
+                  <button
+                    onClick={handleSaveImport}
+                    disabled={importing}
+                    className="w-full py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs transition-all active:scale-95 flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    {importing ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>Saving Trades to Journal...</span>
+                      </>
+                    ) : (
+                      <span>Save Imported Trades ({parsedTrades.length})</span>
+                    )}
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </main>
